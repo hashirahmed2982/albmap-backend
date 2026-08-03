@@ -72,36 +72,161 @@ async function login({ email, password }) {
 }
 
 /**
- * Verifies a Google ID token against Google's public keys and finds-or-
- * creates the corresponding user. Requires `google-auth-library` — add it
- * (`npm install google-auth-library`) and set GOOGLE_CLIENT_ID in .env
- * before this is production-ready; left as a clearly-marked stub so the
- * route shape is correct even before you wire up real verification.
+ * Shared by loginWithGoogle/loginWithFacebook — finds the user by
+ * (auth_provider, provider_user_id) first (the reliable path for a
+ * repeat login), falling back to matching by email for a first-time
+ * social login on an account that already exists via password signup
+ * (in which case this LINKS the social identity to that existing
+ * account rather than creating a duplicate — same email, one account,
+ * regardless of which method was used to sign in this time).
+ */
+async function findOrCreateSocialUser({ provider, providerUserId, email, name, profileImageUrl }) {
+  const [byProvider] = await pool.query(
+    'SELECT * FROM users WHERE auth_provider = ? AND provider_user_id = ? LIMIT 1',
+    [provider, providerUserId],
+  );
+  if (byProvider.length > 0) {
+    return byProvider[0];
+  }
+
+  const [byEmail] = await pool.query('SELECT * FROM users WHERE email = ? LIMIT 1', [email]);
+  if (byEmail.length > 0) {
+    // Link this social identity to the existing (e.g. password-based)
+    // account rather than creating a second one with the same email —
+    // email has a UNIQUE constraint, so a naive INSERT here would fail
+    // anyway, but doing it explicitly makes the linking intentional
+    // rather than accidental.
+    await pool.query(
+      'UPDATE users SET auth_provider = ?, provider_user_id = ?, is_email_verified = 1 WHERE id = ?',
+      [provider, providerUserId, byEmail[0].id],
+    );
+    const [refreshed] = await pool.query('SELECT * FROM users WHERE id = ?', [byEmail[0].id]);
+    return refreshed[0];
+  }
+
+  const userId = uuidv4();
+  await pool.query(
+    `INSERT INTO users (id, email, name, profile_image_url, role, auth_provider, provider_user_id, is_email_verified)
+     VALUES (?, ?, ?, ?, 'business', ?, ?, 1)`,
+    [userId, email, name, profileImageUrl || null, provider, providerUserId],
+  );
+  const [created] = await pool.query('SELECT * FROM users WHERE id = ?', [userId]);
+  return created[0];
+}
+
+/**
+ * Verifies a Google ID token against Google's public keys (via
+ * google-auth-library, which handles fetching/caching/rotating Google's
+ * signing keys) and checks it was issued for THIS app specifically
+ * (the `audience` check) — without that check, any valid Google ID
+ * token from any app would be accepted, not just ones from this app's
+ * own sign-in flow.
  */
 async function loginWithGoogle({ idToken }) {
   if (!idToken) {
     throw ApiError.badRequest('Missing Google ID token');
   }
+  if (!env.google.clientId) {
+    throw ApiError.internal('Google sign-in is not configured on the server (GOOGLE_CLIENT_ID unset)');
+  }
 
-  // TODO: replace with real verification:
-  //   const { OAuth2Client } = require('google-auth-library');
-  //   const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
-  //   const ticket = await client.verifyIdToken({ idToken, audience: process.env.GOOGLE_CLIENT_ID });
-  //   const payload = ticket.getPayload(); // { email, name, picture, sub }
-  throw ApiError.internal(
-    'Google sign-in is not yet configured on the server — see auth.service.js loginWithGoogle() TODO',
-  );
+  const { OAuth2Client } = require('google-auth-library');
+  const client = new OAuth2Client(env.google.clientId);
+
+  let payload;
+  try {
+    const ticket = await client.verifyIdToken({ idToken, audience: env.google.clientId });
+    payload = ticket.getPayload();
+  } catch (err) {
+    throw ApiError.unauthorized('Invalid or expired Google ID token');
+  }
+
+  if (!payload?.email) {
+    throw ApiError.unauthorized('Google account has no email address');
+  }
+
+  const user = await findOrCreateSocialUser({
+    provider: 'google',
+    providerUserId: payload.sub,
+    email: payload.email,
+    name: payload.name || payload.email.split('@')[0],
+    profileImageUrl: payload.picture,
+  });
+
+  if (!user.is_active) throw ApiError.forbidden('This account has been deactivated');
+
+  const tokens = await issueTokenPair(user.id);
+  return { user: toPublicUser(user), ...tokens };
 }
 
+/**
+ * Verifies a Facebook access token two ways: first that it's simply
+ * valid (the /me call succeeds at all), then — critically — that it was
+ * actually issued for THIS app via the /debug_token endpoint, using our
+ * own app_id+app_secret as credentials for that check. Skipping the
+ * debug_token step would mean accepting ANY valid Facebook access token
+ * from ANY app, not just ones from this app's own login flow — a real
+ * security gap, not just a formality.
+ */
 async function loginWithFacebook({ accessToken }) {
   if (!accessToken) {
     throw ApiError.badRequest('Missing Facebook access token');
   }
-  // TODO: verify accessToken against Facebook's Graph API
-  // (GET https://graph.facebook.com/me?fields=id,name,email&access_token=...)
-  throw ApiError.internal(
-    'Facebook sign-in is not yet configured on the server — see auth.service.js loginWithFacebook() TODO',
-  );
+  if (!env.facebook.appId || !env.facebook.appSecret) {
+    throw ApiError.internal(
+      'Facebook sign-in is not configured on the server (FACEBOOK_APP_ID/FACEBOOK_APP_SECRET unset)',
+    );
+  }
+
+  const appAccessToken = `${env.facebook.appId}|${env.facebook.appSecret}`;
+  const debugUrl = `https://graph.facebook.com/debug_token?input_token=${encodeURIComponent(accessToken)}&access_token=${encodeURIComponent(appAccessToken)}`;
+
+  let debugData;
+  try {
+    const debugRes = await fetch(debugUrl);
+    debugData = await debugRes.json();
+  } catch (err) {
+    throw ApiError.unauthorized('Could not verify Facebook access token');
+  }
+
+  const tokenInfo = debugData?.data;
+  if (!tokenInfo?.is_valid || tokenInfo.app_id !== env.facebook.appId) {
+    throw ApiError.unauthorized('Invalid Facebook access token, or issued for a different app');
+  }
+
+  let profile;
+  try {
+    const profileRes = await fetch(
+      `https://graph.facebook.com/me?fields=id,name,email,picture&access_token=${encodeURIComponent(accessToken)}`,
+    );
+    profile = await profileRes.json();
+  } catch (err) {
+    throw ApiError.unauthorized('Could not fetch Facebook profile');
+  }
+
+  if (!profile?.email) {
+    // Facebook only returns email if the user granted that permission
+    // AND has a verified email on their account — some accounts
+    // (phone-only signup, or the permission was declined) genuinely
+    // have none, which this app requires since email is how accounts
+    // are matched/deduplicated across sign-in methods.
+    throw ApiError.badRequest(
+      'Your Facebook account has no email available. Please use email/password or Google sign-in instead.',
+    );
+  }
+
+  const user = await findOrCreateSocialUser({
+    provider: 'facebook',
+    providerUserId: profile.id,
+    email: profile.email,
+    name: profile.name || profile.email.split('@')[0],
+    profileImageUrl: profile.picture?.data?.url,
+  });
+
+  if (!user.is_active) throw ApiError.forbidden('This account has been deactivated');
+
+  const tokens = await issueTokenPair(user.id);
+  return { user: toPublicUser(user), ...tokens };
 }
 
 async function refresh({ refreshToken }) {

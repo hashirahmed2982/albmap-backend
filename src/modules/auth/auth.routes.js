@@ -27,8 +27,18 @@ router.post(
   controller.login,
 );
 
-router.post('/google', controller.loginWithGoogle);
-router.post('/facebook', controller.loginWithFacebook);
+router.post(
+  '/google',
+  [body('idToken').notEmpty().withMessage('idToken is required')],
+  validate,
+  controller.loginWithGoogle,
+);
+router.post(
+  '/facebook',
+  [body('accessToken').notEmpty().withMessage('accessToken is required')],
+  validate,
+  controller.loginWithFacebook,
+);
 
 router.post(
   '/refresh',

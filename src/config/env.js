@@ -49,6 +49,21 @@ const env = {
   firebase: {
     serviceAccountPath: process.env.FIREBASE_SERVICE_ACCOUNT_PATH || null,
   },
+   google: {
+    // The "audience" a Google ID token must have been issued for — this
+    // is what actually proves the token was meant for THIS app, not some
+    // other app that happens to also use Google Sign-In. Get this from
+    // Google Cloud Console (see docs/SOCIAL_LOGIN_SETUP.md). Using the
+    // Web client ID here is correct even for mobile — Android/iOS client
+    // IDs are for the native SDK's own config, but ID token verification
+    // on the backend checks against the associated Web client ID.
+    clientId: process.env.GOOGLE_CLIENT_ID || null,
+  },
+
+  facebook: {
+    appId: process.env.FACEBOOK_APP_ID || null,
+    appSecret: process.env.FACEBOOK_APP_SECRET || null,
+  },
 
   seedAdmin: {
     email: process.env.SEED_ADMIN_EMAIL || 'admin@albmap.app',

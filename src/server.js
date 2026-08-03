@@ -2,7 +2,12 @@ const app = require('./app');
 const env = require('./config/env');
 const { testConnection } = require('./config/db');
 const { cleanupExpiredTokens } = require('./db/cleanup-tokens');
-
+process.on('unhandledRejection', (reason) => {
+  console.error('⚠️  Unhandled promise rejection (server staying up):', reason);
+});
+process.on('uncaughtException', (err) => {
+  console.error('⚠️  Uncaught exception (server staying up):', err);
+});
 const TOKEN_CLEANUP_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
 async function start() {

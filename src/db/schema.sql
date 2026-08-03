@@ -19,13 +19,21 @@ CREATE TABLE IF NOT EXISTS users (
   profile_image_url VARCHAR(500) NULL,
   role          ENUM('business', 'admin') NOT NULL DEFAULT 'business',
   auth_provider ENUM('password', 'google', 'facebook') NOT NULL DEFAULT 'password',
+  -- The provider's own stable unique ID (Google's `sub` claim, Facebook's
+  -- `id` field) — NOT the same as our own `id` above. Used to find the
+  -- same account again on a repeat social login without relying on email
+  -- matching alone, since email addresses can be unverified or (rarely)
+  -- reused across different provider accounts.
+  provider_user_id VARCHAR(255) NULL,
+  is_email_verified TINYINT(1) NOT NULL DEFAULT 0,
   is_email_verified TINYINT(1) NOT NULL DEFAULT 0,
   is_active     TINYINT(1) NOT NULL DEFAULT 1,
   fcm_token     VARCHAR(255)  NULL,           -- current device's push token, latest wins
   created_at    DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at    DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
 
-  INDEX idx_users_role (role)
+  INDEX idx_users_role (role),
+  INDEX idx_users_provider (auth_provider, provider_user_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ---------------------------------------------------------------------------
