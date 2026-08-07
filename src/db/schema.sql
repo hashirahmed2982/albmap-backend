@@ -253,6 +253,27 @@ CREATE TABLE IF NOT EXISTS notification_reads (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ---------------------------------------------------------------------------
+-- notification_deletes — per-user "hide from my feed" tracking, mirroring
+-- notification_reads. Notifications are shared rows (a broadcast is the
+-- same row for every recipient), so a user "deleting" one can never mean
+-- removing the row itself — that would delete it out from under every
+-- other recipient too. A row's existence here means that one user no
+-- longer sees that notification in GET /notifications; the underlying
+-- notification (and everyone else's copy of it) is untouched.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS notification_deletes (
+  id              VARCHAR(36) NOT NULL PRIMARY KEY,
+  notification_id VARCHAR(36) NOT NULL,
+  user_id         VARCHAR(36) NOT NULL,
+  deleted_at      DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+  FOREIGN KEY (notification_id) REFERENCES notifications(id) ON DELETE CASCADE,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  UNIQUE KEY uq_delete_per_user_notification (notification_id, user_id),
+  INDEX idx_deletes_user (user_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ---------------------------------------------------------------------------
 -- reviews — one review per user per business (enforced by unique key).
 -- business.rating_avg/rating_count are recalculated from this table
 -- whenever a review is added/updated/deleted (see review.service.js) —

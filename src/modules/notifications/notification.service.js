@@ -179,7 +179,8 @@ async function reviewBroadcast(notificationId, adminId, decision, reason) {
  * what the in-app Notifications screen fetches, replacing the old
  * purely-local (device-only, never synced) Hive-backed list. Pending and
  * rejected broadcasts never appear here — only approved ones are visible
- * to end users at all.
+ * to end users at all. Anything this user has deleted (notification_deletes)
+ * is excluded the same way — permanently, from their feed only.
  */
 async function getFeedForUser(userId, { page = 1, limit = 30 } = {}) {
   const pageLimit = Math.min(Math.max(parseInt(limit, 10) || 30, 1), 100);
@@ -196,17 +197,20 @@ async function getFeedForUser(userId, { page = 1, limit = 30 } = {}) {
      FROM notifications n
      LEFT JOIN businesses b ON b.id = n.business_id
      LEFT JOIN notification_reads r ON r.notification_id = n.id AND r.user_id = ?
-     WHERE n.status = 'approved' AND (n.target_user_id IS NULL OR n.target_user_id = ?)
+     LEFT JOIN notification_deletes d ON d.notification_id = n.id AND d.user_id = ?
+     WHERE n.status = 'approved' AND (n.target_user_id IS NULL OR n.target_user_id = ?) AND d.id IS NULL
      ORDER BY n.created_at DESC
      LIMIT ? OFFSET ?`,
-    [userId, userId, pageLimit, offset],
+    [userId, userId, userId, pageLimit, offset],
   );
   const [[{ total }]] = await pool.query('SELECT FOUND_ROWS() AS total');
   const [[{ unreadCount }]] = await pool.query(
     `SELECT COUNT(*) AS unreadCount FROM notifications n
      LEFT JOIN notification_reads r ON r.notification_id = n.id AND r.user_id = ?
-     WHERE n.status = 'approved' AND (n.target_user_id IS NULL OR n.target_user_id = ?) AND r.id IS NULL`,
-    [userId, userId],
+     LEFT JOIN notification_deletes d ON d.notification_id = n.id AND d.user_id = ?
+     WHERE n.status = 'approved' AND (n.target_user_id IS NULL OR n.target_user_id = ?)
+       AND r.id IS NULL AND d.id IS NULL`,
+    [userId, userId, userId],
   );
 
   return {
@@ -240,6 +244,53 @@ async function markAllAsRead(userId) {
   );
 }
 
+/**
+ * Removes one notification from just this user's feed. Notifications are
+ * shared rows (a broadcast is the exact same row every recipient sees), so
+ * this can never be a real DELETE FROM notifications — that would remove
+ * it from everyone at once. Instead it records a per-user "hide" the same
+ * way markAsRead records a per-user "read" (see notification_deletes,
+ * mirroring notification_reads). getFeedForUser excludes anything hidden
+ * this way, permanently, for that user.
+ *
+ * 404s if the notification doesn't exist or was never visible to this
+ * user in the first place (wrong target_user_id, or still pending/
+ * rejected) — same visibility rule getFeedForUser enforces, so a user
+ * can't probe for/hide notifications that were never theirs to see.
+ */
+async function deleteNotification(notificationId, userId) {
+  const [rows] = await pool.query(
+    `SELECT id FROM notifications
+     WHERE id = ? AND status = 'approved' AND (target_user_id IS NULL OR target_user_id = ?)`,
+    [notificationId, userId],
+  );
+  if (!rows[0]) throw ApiError.notFound('Notification not found');
+
+  await pool.query(
+    `INSERT INTO notification_deletes (id, notification_id, user_id)
+     VALUES (?, ?, ?)
+     ON DUPLICATE KEY UPDATE deleted_at = deleted_at`, // idempotent — already-hidden stays as-is
+    [uuidv4(), notificationId, userId],
+  );
+}
+
+/** "Clear all" — hides every notification currently visible to this user. */
+async function deleteAllNotifications(userId) {
+  const [visibleRows] = await pool.query(
+    `SELECT n.id FROM notifications n
+     LEFT JOIN notification_deletes d ON d.notification_id = n.id AND d.user_id = ?
+     WHERE n.status = 'approved' AND (n.target_user_id IS NULL OR n.target_user_id = ?) AND d.id IS NULL`,
+    [userId, userId],
+  );
+  if (visibleRows.length === 0) return;
+
+  const values = visibleRows.map((r) => [uuidv4(), r.id, userId]);
+  await pool.query(
+    `INSERT IGNORE INTO notification_deletes (id, notification_id, user_id) VALUES ?`,
+    [values],
+  );
+}
+
 module.exports = {
   submitBroadcast,
   notifyBusinessStatusChange,
@@ -249,4 +300,6 @@ module.exports = {
   getFeedForUser,
   markAsRead,
   markAllAsRead,
+  deleteNotification,
+  deleteAllNotifications,
 };
