@@ -5,6 +5,7 @@ const { pool } = require('../../config/db');
 const env = require('../../config/env');
 const ApiError = require('../../utils/ApiError');
 const { signAccessToken, signRefreshToken, verifyRefreshToken, hashToken } = require('../../utils/jwt');
+const emailService = require('../notifications/email');
 
 function toPublicUser(row) {
   return {
@@ -48,6 +49,12 @@ async function signup({ email, password, name }) {
 
   const [rows] = await pool.query('SELECT * FROM users WHERE id = ?', [userId]);
   const tokens = await issueTokenPair(userId);
+
+  // Fire-and-forget — a slow or failed email should never delay or break
+  // the signup response itself. emailService.sendWelcomeEmail already
+  // catches its own errors internally and never throws.
+  emailService.sendWelcomeEmail(rows[0]);
+
   return { user: toPublicUser(rows[0]), ...tokens };
 }
 
@@ -273,25 +280,55 @@ async function getCurrentUser(userId) {
 }
 
 async function forgotPassword({ email }) {
-  const [rows] = await pool.query('SELECT id FROM users WHERE email = ? LIMIT 1', [email]);
+  const [rows] = await pool.query('SELECT id, name, email FROM users WHERE email = ? LIMIT 1', [email]);
   // Always respond successfully regardless of whether the email exists —
   // don't leak which emails are registered via response timing/content.
+  // This is deliberate, not a bug: it's the same anti-enumeration
+  // pattern every major site uses (Gmail, GitHub, etc. never confirm or
+  // deny whether an email is registered from this endpoint).
   if (rows.length === 0) return;
 
-  const userId = rows[0].id;
+  const user = rows[0];
   const rawToken = crypto.randomBytes(32).toString('hex');
   const tokenHash = hashToken(rawToken);
 
   await pool.query(
     `INSERT INTO password_reset_tokens (id, user_id, token_hash, expires_at)
      VALUES (?, ?, ?, DATE_ADD(NOW(), INTERVAL 1 HOUR))`,
-    [uuidv4(), userId, tokenHash],
+    [uuidv4(), user.id, tokenHash],
   );
 
-  // TODO: send an email containing a deep link like
-  //   https://albmap.app/reset-password?token=${rawToken}
-  // via your email provider of choice (SendGrid, SES, Postmark, etc).
-  console.log(`[DEV ONLY] Password reset token for ${email}: ${rawToken}`);
+  await emailService.sendPasswordResetEmail(user, rawToken);
+}
+
+/**
+ * Consumes the token from forgotPassword()'s email link. Doesn't require
+ * the old password (the whole point of "forgot" password) — the token
+ * itself, which only reached the real account owner's inbox, is the
+ * proof of identity here.
+ */
+async function resetPassword({ token, newPassword }) {
+  if (!token) throw ApiError.badRequest('Missing reset token');
+
+  const tokenHash = hashToken(token);
+  const [rows] = await pool.query(
+    `SELECT * FROM password_reset_tokens
+     WHERE token_hash = ? AND used_at IS NULL AND expires_at > NOW()
+     LIMIT 1`,
+    [tokenHash],
+  );
+  const resetToken = rows[0];
+  if (!resetToken) {
+    throw ApiError.badRequest('This reset link is invalid or has expired. Please request a new one.');
+  }
+
+  const newHash = await bcrypt.hash(newPassword, 10);
+  await pool.query('UPDATE users SET password_hash = ? WHERE id = ?', [newHash, resetToken.user_id]);
+  await pool.query('UPDATE password_reset_tokens SET used_at = NOW() WHERE id = ?', [resetToken.id]);
+
+  // Same reasoning as changePassword: a password reset should invalidate
+  // every existing session, not just leave old refresh tokens usable.
+  await pool.query('UPDATE refresh_tokens SET revoked_at = NOW() WHERE user_id = ?', [resetToken.user_id]);
 }
 
 /**
@@ -363,6 +400,7 @@ module.exports = {
   logout,
   getCurrentUser,
   forgotPassword,
+  resetPassword,
   changePassword,
   updateProfile,
   toPublicUser,

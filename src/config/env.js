@@ -49,6 +49,18 @@ const env = {
   firebase: {
     serviceAccountPath: process.env.FIREBASE_SERVICE_ACCOUNT_PATH || null,
   },
+
+  smtp: {
+    host: process.env.SMTP_HOST || null,
+    port: parseInt(process.env.SMTP_PORT || '2525', 10),
+    user: process.env.SMTP_USER || null,
+    password: process.env.SMTP_PASSWORD || null,
+    fromAddress: process.env.SMTP_FROM_ADDRESS || 'AlbMap <no-reply@albmap.app>',
+    adminNotificationEmail: process.env.ADMIN_NOTIFICATION_EMAIL || null,
+  },
+
+  websiteUrl: process.env.WEBSITE_URL || 'http://localhost:3001',
+
    google: {
     // The "audience" a Google ID token must have been issued for — this
     // is what actually proves the token was meant for THIS app, not some

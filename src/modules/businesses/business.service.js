@@ -1,6 +1,7 @@
 const { v4: uuidv4 } = require('uuid');
 const { pool } = require('../../config/db');
 const ApiError = require('../../utils/ApiError');
+const emailService = require('../notifications/email');
 
 /**
  * Builds a single display-friendly line from the structured address
@@ -263,7 +264,20 @@ async function submitBusiness(ownerId, data) {
     [id],
   );
 
-  return getBusinessById(id);
+  const created = await getBusinessById(id);
+
+  // Fire-and-forget — emailService already catches its own errors, so a
+  // slow/failed email never delays or breaks the actual submission
+  // response. Without this, the only way an admin would know a new
+  // business was waiting was by manually checking the pending queue.
+  const [ownerRows] = await pool.query('SELECT name, email FROM users WHERE id = ?', [ownerId]);
+  const owner = ownerRows[0];
+  if (owner) {
+    emailService.sendBusinessSubmittedEmail(owner, created);
+    emailService.sendAdminNewBusinessNotification(created, owner);
+  }
+
+  return created;
 }
 
 /**

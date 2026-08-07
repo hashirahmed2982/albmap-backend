@@ -47,6 +47,12 @@ const forgotPassword = asyncHandler(async (req, res) => {
   res.json({ message: 'If that email exists, a reset link has been sent.' });
 });
 
+const resetPassword = asyncHandler(async (req, res) => {
+  const { token, newPassword } = req.body;
+  await authService.resetPassword({ token, newPassword });
+  res.json({ message: 'Password reset successfully.' });
+});
+
 const changePassword = asyncHandler(async (req, res) => {
   const { currentPassword, newPassword } = req.body;
   await authService.changePassword(req.user.id, { currentPassword, newPassword });
@@ -68,6 +74,7 @@ module.exports = {
   logout,
   me,
   forgotPassword,
+  resetPassword,
   changePassword,
   updateProfile,
 };
