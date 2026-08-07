@@ -1,4 +1,5 @@
 node_modules/
+albmap1.json
 .env
 uploads/*
 !uploads/.gitkeep
