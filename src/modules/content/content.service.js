@@ -68,7 +68,18 @@ function validateShape(key, data) {
   }
 }
 
-/** Every page, keyed camelCase (aboutUs, socialLinks, ...) for both clients. */
+/**
+ * Every page, keyed camelCase (aboutUs, socialLinks, ...) for both clients.
+ *
+ * `row.data` is already a plain object here, not a JSON string — mysql2
+ * auto-parses columns declared JSON (see site_content in schema.sql)
+ * unless the pool is created with `jsonStrings: true` (it isn't, see
+ * config/db.js). Calling JSON.parse() on it (the original bug here)
+ * blew up in production: JSON.parse coerces a non-string argument via
+ * String(value) first, and String({...}) is the literal text
+ * "[object Object]" — not valid JSON, so every GET /content request
+ * failed with "SyntaxError: \"[object Object]\" is not valid JSON".
+ */
 async function getAllContent() {
   const [rows] = await pool.query('SELECT `key`, data, updated_at FROM site_content');
   const byKey = new Map(rows.map((r) => [r.key, r]));
@@ -77,7 +88,7 @@ async function getAllContent() {
   for (const key of ALLOWED_KEYS) {
     const row = byKey.get(key);
     result[toCamelKey(key)] = row
-      ? { ...JSON.parse(row.data), updatedAt: row.updated_at }
+      ? { ...row.data, updatedAt: row.updated_at }
       : null;
   }
   return result;
@@ -97,7 +108,9 @@ async function updateContent(key, data, adminId) {
   );
 
   const [rows] = await pool.query('SELECT data, updated_at FROM site_content WHERE `key` = ?', [key]);
-  return { ...JSON.parse(rows[0].data), updatedAt: rows[0].updated_at };
+  // Same reasoning as getAllContent above — rows[0].data is already an
+  // object, not a JSON string.
+  return { ...rows[0].data, updatedAt: rows[0].updated_at };
 }
 
 module.exports = { ALLOWED_KEYS, getAllContent, updateContent };
