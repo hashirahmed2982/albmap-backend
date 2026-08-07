@@ -12,6 +12,7 @@ const categoryRoutes = require('../modules/categories/category.routes');
 const userRoutes = require('../modules/users/user.routes');
 const favoritesRoutes = require('../modules/favorites/favorites.routes');
 const contactRoutes = require('../modules/contact/contact.routes');
+const contentRoutes = require('../modules/content/content.routes');
 
 const router = express.Router();
 
@@ -28,6 +29,7 @@ router.use('/categories', categoryRoutes);
 router.use('/users', userRoutes);
 router.use('/favorites', favoritesRoutes);
 router.use('/contact', contactRoutes);
+router.use('/content', contentRoutes);
 router.use('/admin', adminRoutes);
 
 module.exports = router;

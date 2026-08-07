@@ -6,6 +6,7 @@ const businessService = require('../businesses/business.service');
 const eventService = require('../events/event.service');
 const categoryService = require('../categories/category.service');
 const notificationService = require('../notifications/notification.service');
+const contentService = require('../content/content.service');
 
 // ---------------- Dashboard ----------------
 
@@ -277,4 +278,8 @@ module.exports = {
   getPendingBroadcasts: notificationService.getPendingBroadcasts,
   getAllBroadcasts: notificationService.getAllBroadcasts,
   reviewBroadcast: notificationService.reviewBroadcast,
+  // Site content (About Us, social links, Privacy Policy, Terms &
+  // Conditions) — same thin-delegation pattern. Reading it isn't
+  // admin-only (see the public /content route), only writing is.
+  updateContent: contentService.updateContent,
 };

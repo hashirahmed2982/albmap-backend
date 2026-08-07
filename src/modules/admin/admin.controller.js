@@ -104,6 +104,11 @@ const reviewBroadcast = asyncHandler(async (req, res) => {
   res.json(result);
 });
 
+const updateContent = asyncHandler(async (req, res) => {
+  const content = await adminService.updateContent(req.params.key, req.body, req.user.id);
+  res.json(content);
+});
+
 module.exports = {
   getDashboardStats,
   getPendingBusinesses,
@@ -124,4 +129,5 @@ module.exports = {
   getPendingBroadcasts,
   getAllBroadcasts,
   reviewBroadcast,
+  updateContent,
 };

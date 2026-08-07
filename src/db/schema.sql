@@ -357,4 +357,31 @@ CREATE TABLE IF NOT EXISTS event_interests (
   INDEX idx_event_interests_event (event_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- ---------------------------------------------------------------------------
+-- site_content — admin-editable marketing/legal content, previously
+-- hardcoded independently in both the mobile app (localization files) and
+-- the website (next-intl messages + literal JSX), which meant an admin
+-- could never update the About Us copy, social links, Privacy Policy, or
+-- Terms & Conditions without a developer shipping a new build/deploy on
+-- BOTH clients. One `key` row per page; `data` holds that page's actual
+-- content as JSON since each key's shape is different (see
+-- content.service.js's validateShape for what each one requires) — a
+-- single flexible table beats four near-identical single-purpose ones for
+-- something this small, and adding a fifth editable page later is a code
+-- change, not a migration.
+--
+-- Keys in use: 'about_us', 'social_links', 'privacy_policy',
+-- 'terms_conditions'. Public GET /content serves all four to both
+-- clients unauthenticated (this is marketing/legal copy, not sensitive);
+-- PUT /admin/content/:key is the only way to change one, admin-only.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS site_content (
+  `key`       VARCHAR(40)  NOT NULL PRIMARY KEY,
+  data        JSON         NOT NULL,
+  updated_by  VARCHAR(36)  NULL,
+  updated_at  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+
+  FOREIGN KEY (updated_by) REFERENCES users(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 SET FOREIGN_KEY_CHECKS = 1;

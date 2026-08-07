@@ -71,4 +71,10 @@ router.patch(
   controller.reviewBroadcast,
 );
 
+// Shape validation beyond "is it JSON" happens in content.service.js's
+// validateShape — it differs per key (about_us needs 5 required strings,
+// privacy_policy/terms_conditions need a title + sections array, etc.),
+// so it isn't worth expressing again here as express-validator rules.
+router.put('/content/:key', controller.updateContent);
+
 module.exports = router;
