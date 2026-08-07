@@ -7,14 +7,18 @@ const getDashboardStats = asyncHandler(async (req, res) => {
 });
 
 const getPendingBusinesses = asyncHandler(async (req, res) => {
-  const { search, dateFrom, dateTo, page, limit } = req.query;
-  const result = await adminService.getPendingBusinesses({ search, dateFrom, dateTo, page, limit });
+  const { search, dateFrom, dateTo, page, limit, sortBy, sortOrder } = req.query;
+  const result = await adminService.getPendingBusinesses({
+    search, dateFrom, dateTo, page, limit, sortBy, sortOrder,
+  });
   res.json(result);
 });
 
 const getAllBusinesses = asyncHandler(async (req, res) => {
-  const { status, search, dateFrom, dateTo, page, limit } = req.query;
-  const result = await adminService.getAllBusinesses({ status, search, dateFrom, dateTo, page, limit });
+  const { status, search, dateFrom, dateTo, page, limit, sortBy, sortOrder } = req.query;
+  const result = await adminService.getAllBusinesses({
+    status, search, dateFrom, dateTo, page, limit, sortBy, sortOrder,
+  });
   res.json(result);
 });
 
@@ -30,8 +34,8 @@ const setBusinessActive = asyncHandler(async (req, res) => {
 });
 
 const getAllUsers = asyncHandler(async (req, res) => {
-  const { search, dateFrom, dateTo, page, limit } = req.query;
-  const result = await adminService.getAllUsers({ search, dateFrom, dateTo, page, limit });
+  const { search, dateFrom, dateTo, page, limit, sortBy, sortOrder } = req.query;
+  const result = await adminService.getAllUsers({ search, dateFrom, dateTo, page, limit, sortBy, sortOrder });
   res.json(result);
 });
 
@@ -41,8 +45,8 @@ const setUserActive = asyncHandler(async (req, res) => {
 });
 
 const getAllEvents = asyncHandler(async (req, res) => {
-  const { search, dateFrom, dateTo, page, limit } = req.query;
-  const result = await adminService.getAllEvents({ search, dateFrom, dateTo, page, limit });
+  const { search, dateFrom, dateTo, page, limit, sortBy, sortOrder } = req.query;
+  const result = await adminService.getAllEvents({ search, dateFrom, dateTo, page, limit, sortBy, sortOrder });
   res.json(result);
 });
 

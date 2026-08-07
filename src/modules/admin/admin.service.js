@@ -76,17 +76,45 @@ function paginationMeta(pageNum, pageLimit, total) {
 }
 
 /**
- * Pending Review is just "All Businesses filtered to status=pending",
- * oldest-first (handle the longest-waiting submissions first) instead of
- * All Businesses' newest-first — everything else (search, date range,
- * pagination) is identical, so this is a thin wrapper instead of a
- * separate query.
+ * Turns a client-supplied `sortBy` into a real `ORDER BY` clause without
+ * ever interpolating a client string directly into SQL — `columnMap`'s
+ * keys are the only sort values ever accepted (anything else, or
+ * omitted, falls back to `defaultKey`), and its values are the actual
+ * column expressions. `sortOrder` is similarly constrained to exactly
+ * 'asc'/'desc', falling back to `defaultDirection` for anything else.
  */
-async function getPendingBusinesses(params = {}) {
-  return getAllBusinesses({ ...params, status: 'pending', order: 'ASC' });
+function resolveSort(sortBy, sortOrder, columnMap, defaultKey, defaultDirection = 'DESC') {
+  const key = Object.prototype.hasOwnProperty.call(columnMap, sortBy) ? sortBy : defaultKey;
+  const direction = sortOrder === 'asc' ? 'ASC' : sortOrder === 'desc' ? 'DESC' : defaultDirection;
+  return `${columnMap[key]} ${direction}`;
 }
 
-async function getAllBusinesses({ status, search, dateFrom, dateTo, page, limit, order } = {}) {
+const BUSINESS_SORT_COLUMNS = { name: 'b.name', createdAt: 'b.created_at' };
+
+/**
+ * Pending Review is just "All Businesses filtered to status=pending",
+ * oldest-first by default (handle the longest-waiting submissions first)
+ * instead of All Businesses' newest-first-by-default — everything else
+ * (search, date range, sorting, pagination) is identical, so this is a
+ * thin wrapper instead of a separate query. An explicit sortBy/sortOrder
+ * from the admin portal (clicking a column header) still overrides the
+ * default either way.
+ */
+async function getPendingBusinesses(params = {}) {
+  return getAllBusinesses({
+    ...params,
+    status: 'pending',
+    // Spreading params first and overriding after (rather than the
+    // reverse) matters here — the controller always passes sortBy/
+    // sortOrder through, as `undefined` when absent from the query
+    // string, and `undefined` would silently clobber a default placed
+    // before the spread.
+    sortBy: params.sortBy || 'createdAt',
+    sortOrder: params.sortOrder || 'asc',
+  });
+}
+
+async function getAllBusinesses({ status, search, dateFrom, dateTo, page, limit, sortBy, sortOrder } = {}) {
   const { pageNum, pageLimit, offset } = pageParams(page, limit);
 
   let sql = `
@@ -118,7 +146,7 @@ async function getAllBusinesses({ status, search, dateFrom, dateTo, page, limit,
     sql += ' AND b.created_at < DATE_ADD(?, INTERVAL 1 DAY)';
     params.push(dateTo);
   }
-  sql += ` ORDER BY b.created_at ${order === 'ASC' ? 'ASC' : 'DESC'} LIMIT ? OFFSET ?`;
+  sql += ` ORDER BY ${resolveSort(sortBy, sortOrder, BUSINESS_SORT_COLUMNS, 'createdAt')} LIMIT ? OFFSET ?`;
   params.push(pageLimit, offset);
 
   const [rows] = await pool.query(sql, params);
@@ -171,7 +199,9 @@ async function deactivateBusiness(businessId, isActive) {
 
 // ---------------- User management ----------------
 
-async function getAllUsers({ search, dateFrom, dateTo, page, limit } = {}) {
+const USER_SORT_COLUMNS = { name: 'name', createdAt: 'created_at' };
+
+async function getAllUsers({ search, dateFrom, dateTo, page, limit, sortBy, sortOrder } = {}) {
   const { pageNum, pageLimit, offset } = pageParams(page, limit);
 
   let sql = `SELECT SQL_CALC_FOUND_ROWS id, email, name, phone, role, is_active, created_at FROM users WHERE role = 'business'`;
@@ -188,7 +218,7 @@ async function getAllUsers({ search, dateFrom, dateTo, page, limit } = {}) {
     sql += ' AND created_at < DATE_ADD(?, INTERVAL 1 DAY)';
     params.push(dateTo);
   }
-  sql += ' ORDER BY created_at DESC LIMIT ? OFFSET ?';
+  sql += ` ORDER BY ${resolveSort(sortBy, sortOrder, USER_SORT_COLUMNS, 'createdAt')} LIMIT ? OFFSET ?`;
   params.push(pageLimit, offset);
 
   const [rows] = await pool.query(sql, params);
@@ -218,7 +248,9 @@ async function setUserActive(userId, isActive) {
 
 // ---------------- Event moderation ----------------
 
-async function getAllEvents({ search, dateFrom, dateTo, page, limit } = {}) {
+const EVENT_SORT_COLUMNS = { name: 'e.name', startTime: 'e.start_time' };
+
+async function getAllEvents({ search, dateFrom, dateTo, page, limit, sortBy, sortOrder } = {}) {
   const { pageNum, pageLimit, offset } = pageParams(page, limit);
 
   let sql = `
@@ -245,7 +277,7 @@ async function getAllEvents({ search, dateFrom, dateTo, page, limit } = {}) {
     sql += ' AND e.start_time < DATE_ADD(?, INTERVAL 1 DAY)';
     params.push(dateTo);
   }
-  sql += ' ORDER BY e.start_time DESC LIMIT ? OFFSET ?';
+  sql += ` ORDER BY ${resolveSort(sortBy, sortOrder, EVENT_SORT_COLUMNS, 'startTime')} LIMIT ? OFFSET ?`;
   params.push(pageLimit, offset);
 
   const [rows] = await pool.query(sql, params);
