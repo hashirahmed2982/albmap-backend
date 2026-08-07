@@ -7,14 +7,19 @@ const getDashboardStats = asyncHandler(async (req, res) => {
 });
 
 const getPendingBusinesses = asyncHandler(async (req, res) => {
-  const businesses = await adminService.getPendingBusinesses();
-  res.json({ data: businesses });
+  const { search, dateFrom, dateTo, page, limit, sortBy, sortOrder } = req.query;
+  const result = await adminService.getPendingBusinesses({
+    search, dateFrom, dateTo, page, limit, sortBy, sortOrder,
+  });
+  res.json(result);
 });
 
 const getAllBusinesses = asyncHandler(async (req, res) => {
-  const { status, search } = req.query;
-  const businesses = await adminService.getAllBusinesses({ status, search });
-  res.json({ data: businesses });
+  const { status, search, dateFrom, dateTo, page, limit, sortBy, sortOrder } = req.query;
+  const result = await adminService.getAllBusinesses({
+    status, search, dateFrom, dateTo, page, limit, sortBy, sortOrder,
+  });
+  res.json(result);
 });
 
 const reviewBusiness = asyncHandler(async (req, res) => {
@@ -29,9 +34,9 @@ const setBusinessActive = asyncHandler(async (req, res) => {
 });
 
 const getAllUsers = asyncHandler(async (req, res) => {
-  const { search } = req.query;
-  const users = await adminService.getAllUsers({ search });
-  res.json({ data: users });
+  const { search, dateFrom, dateTo, page, limit, sortBy, sortOrder } = req.query;
+  const result = await adminService.getAllUsers({ search, dateFrom, dateTo, page, limit, sortBy, sortOrder });
+  res.json(result);
 });
 
 const setUserActive = asyncHandler(async (req, res) => {
@@ -40,8 +45,9 @@ const setUserActive = asyncHandler(async (req, res) => {
 });
 
 const getAllEvents = asyncHandler(async (req, res) => {
-  const events = await adminService.getAllEvents();
-  res.json({ data: events });
+  const { search, dateFrom, dateTo, page, limit, sortBy, sortOrder } = req.query;
+  const result = await adminService.getAllEvents({ search, dateFrom, dateTo, page, limit, sortBy, sortOrder });
+  res.json(result);
 });
 
 const setEventActive = asyncHandler(async (req, res) => {
@@ -104,6 +110,11 @@ const reviewBroadcast = asyncHandler(async (req, res) => {
   res.json(result);
 });
 
+const updateContent = asyncHandler(async (req, res) => {
+  const content = await adminService.updateContent(req.params.key, req.body, req.user.id);
+  res.json(content);
+});
+
 module.exports = {
   getDashboardStats,
   getPendingBusinesses,
@@ -124,4 +135,5 @@ module.exports = {
   getPendingBroadcasts,
   getAllBroadcasts,
   reviewBroadcast,
+  updateContent,
 };

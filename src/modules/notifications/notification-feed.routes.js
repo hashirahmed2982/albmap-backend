@@ -12,5 +12,7 @@ router.use(requireAuth);
 router.get('/', controller.getFeed);
 router.post('/:id/read', controller.markAsRead);
 router.post('/read-all', controller.markAllAsRead);
+router.delete('/:id', controller.deleteNotification);
+router.delete('/', controller.deleteAllNotifications);
 
 module.exports = router;

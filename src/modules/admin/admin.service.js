@@ -6,6 +6,7 @@ const businessService = require('../businesses/business.service');
 const eventService = require('../events/event.service');
 const categoryService = require('../categories/category.service');
 const notificationService = require('../notifications/notification.service');
+const contentService = require('../content/content.service');
 
 // ---------------- Dashboard ----------------
 
@@ -61,22 +62,63 @@ async function getDashboardStats() {
 
 // ---------------- Business approval ----------------
 
-async function getPendingBusinesses() {
-  const [rows] = await pool.query(
-    `SELECT b.*, owner.name AS owner_name, owner.email AS owner_email, owner.phone AS owner_phone,
-            reviewer.name AS reviewer_name
-     FROM businesses b
-     JOIN users owner ON owner.id = b.owner_id
-     LEFT JOIN users reviewer ON reviewer.id = b.reviewed_by
-     WHERE b.status = 'pending'
-     ORDER BY b.created_at ASC`,
-  );
-  return rows.map(businessService.toAdminBusiness);
+/** Shared by every admin list endpoint (businesses/users/events) — clamps
+ * page/limit to sane bounds and computes the SQL OFFSET once so each
+ * caller doesn't repeat the same parsing. */
+function pageParams(page, limit, defaultLimit = 20) {
+  const pageLimit = Math.min(Math.max(parseInt(limit, 10) || defaultLimit, 1), 100);
+  const pageNum = Math.max(parseInt(page, 10) || 1, 1);
+  return { pageNum, pageLimit, offset: (pageNum - 1) * pageLimit };
 }
 
-async function getAllBusinesses({ status, search }) {
+function paginationMeta(pageNum, pageLimit, total) {
+  return { page: pageNum, limit: pageLimit, total, totalPages: Math.max(Math.ceil(total / pageLimit), 1) };
+}
+
+/**
+ * Turns a client-supplied `sortBy` into a real `ORDER BY` clause without
+ * ever interpolating a client string directly into SQL — `columnMap`'s
+ * keys are the only sort values ever accepted (anything else, or
+ * omitted, falls back to `defaultKey`), and its values are the actual
+ * column expressions. `sortOrder` is similarly constrained to exactly
+ * 'asc'/'desc', falling back to `defaultDirection` for anything else.
+ */
+function resolveSort(sortBy, sortOrder, columnMap, defaultKey, defaultDirection = 'DESC') {
+  const key = Object.prototype.hasOwnProperty.call(columnMap, sortBy) ? sortBy : defaultKey;
+  const direction = sortOrder === 'asc' ? 'ASC' : sortOrder === 'desc' ? 'DESC' : defaultDirection;
+  return `${columnMap[key]} ${direction}`;
+}
+
+const BUSINESS_SORT_COLUMNS = { name: 'b.name', createdAt: 'b.created_at' };
+
+/**
+ * Pending Review is just "All Businesses filtered to status=pending",
+ * oldest-first by default (handle the longest-waiting submissions first)
+ * instead of All Businesses' newest-first-by-default — everything else
+ * (search, date range, sorting, pagination) is identical, so this is a
+ * thin wrapper instead of a separate query. An explicit sortBy/sortOrder
+ * from the admin portal (clicking a column header) still overrides the
+ * default either way.
+ */
+async function getPendingBusinesses(params = {}) {
+  return getAllBusinesses({
+    ...params,
+    status: 'pending',
+    // Spreading params first and overriding after (rather than the
+    // reverse) matters here — the controller always passes sortBy/
+    // sortOrder through, as `undefined` when absent from the query
+    // string, and `undefined` would silently clobber a default placed
+    // before the spread.
+    sortBy: params.sortBy || 'createdAt',
+    sortOrder: params.sortOrder || 'asc',
+  });
+}
+
+async function getAllBusinesses({ status, search, dateFrom, dateTo, page, limit, sortBy, sortOrder } = {}) {
+  const { pageNum, pageLimit, offset } = pageParams(page, limit);
+
   let sql = `
-    SELECT b.*, owner.name AS owner_name, owner.email AS owner_email, owner.phone AS owner_phone,
+    SELECT SQL_CALC_FOUND_ROWS b.*, owner.name AS owner_name, owner.email AS owner_email, owner.phone AS owner_phone,
            reviewer.name AS reviewer_name
     FROM businesses b
     JOIN users owner ON owner.id = b.owner_id
@@ -92,9 +134,28 @@ async function getAllBusinesses({ status, search }) {
     sql += ' AND b.name LIKE ?';
     params.push(`%${search}%`);
   }
-  sql += ' ORDER BY b.created_at DESC';
+  // dateTo is a plain "YYYY-MM-DD" from the admin portal's date picker —
+  // treated as inclusive of the whole day (< the next day), not just
+  // midnight, or picking a range that includes today would silently
+  // exclude everything submitted today.
+  if (dateFrom) {
+    sql += ' AND b.created_at >= ?';
+    params.push(dateFrom);
+  }
+  if (dateTo) {
+    sql += ' AND b.created_at < DATE_ADD(?, INTERVAL 1 DAY)';
+    params.push(dateTo);
+  }
+  sql += ` ORDER BY ${resolveSort(sortBy, sortOrder, BUSINESS_SORT_COLUMNS, 'createdAt')} LIMIT ? OFFSET ?`;
+  params.push(pageLimit, offset);
+
   const [rows] = await pool.query(sql, params);
-  return rows.map(businessService.toAdminBusiness);
+  const [[{ total }]] = await pool.query('SELECT FOUND_ROWS() AS total');
+
+  return {
+    data: rows.map(businessService.toAdminBusiness),
+    pagination: paginationMeta(pageNum, pageLimit, total),
+  };
 }
 
 async function reviewBusiness(businessId, adminId, decision, reason) {
@@ -138,24 +199,43 @@ async function deactivateBusiness(businessId, isActive) {
 
 // ---------------- User management ----------------
 
-async function getAllUsers({ search }) {
-  let sql = `SELECT id, email, name, phone, role, is_active, created_at FROM users WHERE role = 'business'`;
+const USER_SORT_COLUMNS = { name: 'name', createdAt: 'created_at' };
+
+async function getAllUsers({ search, dateFrom, dateTo, page, limit, sortBy, sortOrder } = {}) {
+  const { pageNum, pageLimit, offset } = pageParams(page, limit);
+
+  let sql = `SELECT SQL_CALC_FOUND_ROWS id, email, name, phone, role, is_active, created_at FROM users WHERE role = 'business'`;
   const params = [];
   if (search) {
     sql += ' AND (name LIKE ? OR email LIKE ?)';
     params.push(`%${search}%`, `%${search}%`);
   }
-  sql += ' ORDER BY created_at DESC';
+  if (dateFrom) {
+    sql += ' AND created_at >= ?';
+    params.push(dateFrom);
+  }
+  if (dateTo) {
+    sql += ' AND created_at < DATE_ADD(?, INTERVAL 1 DAY)';
+    params.push(dateTo);
+  }
+  sql += ` ORDER BY ${resolveSort(sortBy, sortOrder, USER_SORT_COLUMNS, 'createdAt')} LIMIT ? OFFSET ?`;
+  params.push(pageLimit, offset);
+
   const [rows] = await pool.query(sql, params);
-  return rows.map((u) => ({
-    id: u.id,
-    email: u.email,
-    name: u.name,
-    phone: u.phone,
-    role: u.role,
-    isActive: !!u.is_active,
-    createdAt: u.created_at,
-  }));
+  const [[{ total }]] = await pool.query('SELECT FOUND_ROWS() AS total');
+
+  return {
+    data: rows.map((u) => ({
+      id: u.id,
+      email: u.email,
+      name: u.name,
+      phone: u.phone,
+      role: u.role,
+      isActive: !!u.is_active,
+      createdAt: u.created_at,
+    })),
+    pagination: paginationMeta(pageNum, pageLimit, total),
+  };
 }
 
 async function setUserActive(userId, isActive) {
@@ -168,21 +248,51 @@ async function setUserActive(userId, isActive) {
 
 // ---------------- Event moderation ----------------
 
-async function getAllEvents() {
-  const [rows] = await pool.query(
-    `SELECT e.*, b.name AS business_name, owner.name AS owner_name, owner.email AS owner_email
-     FROM events e
-     JOIN businesses b ON b.id = e.business_id
-     JOIN users owner ON owner.id = b.owner_id
-     ORDER BY e.start_time DESC`,
-  );
+const EVENT_SORT_COLUMNS = { name: 'e.name', startTime: 'e.start_time' };
+
+async function getAllEvents({ search, dateFrom, dateTo, page, limit, sortBy, sortOrder } = {}) {
+  const { pageNum, pageLimit, offset } = pageParams(page, limit);
+
+  let sql = `
+    SELECT SQL_CALC_FOUND_ROWS e.*, b.name AS business_name, owner.name AS owner_name, owner.email AS owner_email
+    FROM events e
+    JOIN businesses b ON b.id = e.business_id
+    JOIN users owner ON owner.id = b.owner_id
+    WHERE 1=1
+  `;
+  const params = [];
+  if (search) {
+    sql += ' AND (e.name LIKE ? OR b.name LIKE ?)';
+    params.push(`%${search}%`, `%${search}%`);
+  }
+  // Filters by when the event *happens* (start_time), not when it was
+  // submitted — the table's own "Starts"/"Ends" columns are what an
+  // admin actually orients by here, unlike businesses/users where
+  // "submitted/joined on" (created_at) is the meaningful date.
+  if (dateFrom) {
+    sql += ' AND e.start_time >= ?';
+    params.push(dateFrom);
+  }
+  if (dateTo) {
+    sql += ' AND e.start_time < DATE_ADD(?, INTERVAL 1 DAY)';
+    params.push(dateTo);
+  }
+  sql += ` ORDER BY ${resolveSort(sortBy, sortOrder, EVENT_SORT_COLUMNS, 'startTime')} LIMIT ? OFFSET ?`;
+  params.push(pageLimit, offset);
+
+  const [rows] = await pool.query(sql, params);
+  const [[{ total }]] = await pool.query('SELECT FOUND_ROWS() AS total');
+
   // toAdminEvent() maps snake_case DB columns to the camelCase shape the
   // admin portal expects (businessName, startTime, etc), plus the extra
   // admin-only context (isActive, createdAt, owner identity) — this was
   // the original reported bug: this function used to return raw unmapped
   // rows, so event.businessName and event.startTime were both `undefined`
   // (rendering as a blank Business column and "Invalid Date").
-  return rows.map(eventService.toAdminEvent);
+  return {
+    data: rows.map(eventService.toAdminEvent),
+    pagination: paginationMeta(pageNum, pageLimit, total),
+  };
 }
 
 async function setEventActive(eventId, isActive) {
@@ -277,4 +387,8 @@ module.exports = {
   getPendingBroadcasts: notificationService.getPendingBroadcasts,
   getAllBroadcasts: notificationService.getAllBroadcasts,
   reviewBroadcast: notificationService.reviewBroadcast,
+  // Site content (About Us, social links, Privacy Policy, Terms &
+  // Conditions) — same thin-delegation pattern. Reading it isn't
+  // admin-only (see the public /content route), only writing is.
+  updateContent: contentService.updateContent,
 };
