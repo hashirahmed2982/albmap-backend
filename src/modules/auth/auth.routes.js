@@ -74,6 +74,14 @@ router.post(
   controller.changePassword,
 );
 
+router.delete(
+  '/me',
+  requireAuth,
+  [body('password').optional().notEmpty().withMessage('Password cannot be blank')],
+  validate,
+  controller.deleteAccount,
+);
+
 router.post(
   '/forgot-password',
   [body('email').isEmail().withMessage('A valid email is required').normalizeEmail()],

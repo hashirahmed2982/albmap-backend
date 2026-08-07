@@ -293,4 +293,47 @@ CREATE TABLE IF NOT EXISTS favorites (
   INDEX idx_favorites_user (user_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- ---------------------------------------------------------------------------
+-- event_favorites — same "survives reinstall/device switch" reasoning as
+-- `favorites`, for events. Kept as its own table rather than adding a
+-- nullable event_id column to `favorites`: that would make every row
+-- ambiguous about whether it's a business or event favorite, and would
+-- mean relaxing `favorites`' existing NOT NULL business_id / its FK and
+-- unique-key shape, which nothing else needs touched for. Previously
+-- event favorites only ever lived in the mobile app's local Hive cache —
+-- gone on reinstall or a new device, unlike business favorites.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS event_favorites (
+  id            VARCHAR(36)  NOT NULL PRIMARY KEY,
+  user_id       VARCHAR(36)  NOT NULL,
+  event_id      VARCHAR(36)  NOT NULL,
+  created_at    DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE,
+  UNIQUE KEY uq_event_favorite_per_user_event (user_id, event_id),
+  INDEX idx_event_favorites_user (user_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ---------------------------------------------------------------------------
+-- event_interests — the "I'm interested" / RSVP signal a user can toggle
+-- on an event, shown as an interest count on the mobile app. Unlike
+-- businesses.rating_avg/rating_count, the count is NOT denormalized onto
+-- `events` here — event listings are paginated and never sorted/filtered
+-- by interest count, so a per-request COUNT(*) join is simple and fast
+-- enough without taking on reviews/favorites' recalculate-on-every-write
+-- complexity for a number nothing queries by.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS event_interests (
+  id            VARCHAR(36)  NOT NULL PRIMARY KEY,
+  user_id       VARCHAR(36)  NOT NULL,
+  event_id      VARCHAR(36)  NOT NULL,
+  created_at    DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE,
+  UNIQUE KEY uq_event_interest_per_user_event (user_id, event_id),
+  INDEX idx_event_interests_event (event_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 SET FOREIGN_KEY_CHECKS = 1;

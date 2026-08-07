@@ -362,6 +362,46 @@ async function changePassword(userId, { currentPassword, newPassword }) {
 }
 
 /**
+ * Permanent, self-service account deletion — required for App Store
+ * review (Guideline 5.1.1(v): an app that supports account creation must
+ * also let a user delete their account from within the app), and there
+ * was previously no path to this at all, in-app or otherwise.
+ *
+ * A hard DELETE, not a deactivate/soft-delete: every table that
+ * references users.id does so with ON DELETE CASCADE (businesses,
+ * favorites, reviews, event_favorites, event_interests, refresh_tokens,
+ * password_reset_tokens, notifications.target_user_id — see schema.sql),
+ * so this one query is genuinely sufficient; there's no second pass of
+ * manual cleanup needed. That cascade is also why the caller-facing
+ * warning matters: for a business owner, this also deletes every
+ * business they own (and, transitively, that business's events/reviews)
+ * — not just their login. The mobile app surfaces that plainly before
+ * calling this, rather than the API silently taking down someone's
+ * listings as a side effect of "delete my account."
+ *
+ * Password-account holders must confirm their current password first —
+ * same reasoning as changePassword: the access token alone (e.g. a
+ * stolen/left-open session) shouldn't be enough to permanently destroy
+ * the account. Social-login-only accounts (no password_hash) have
+ * nothing to confirm, so requireAuth's live JWT is the only gate for them.
+ */
+async function deleteAccount(userId, { password } = {}) {
+  const [rows] = await pool.query('SELECT password_hash FROM users WHERE id = ?', [userId]);
+  const user = rows[0];
+  if (!user) throw ApiError.notFound('User not found');
+
+  if (user.password_hash) {
+    if (!password) {
+      throw ApiError.badRequest('Password is required to delete your account');
+    }
+    const matches = await bcrypt.compare(password, user.password_hash);
+    if (!matches) throw ApiError.unauthorized('Incorrect password');
+  }
+
+  await pool.query('DELETE FROM users WHERE id = ?', [userId]);
+}
+
+/**
  * Owner-editable profile fields — deliberately excludes email (changing
  * email should go through a re-verification flow, not a plain PATCH) and
  * role (never client-settable).
@@ -402,6 +442,7 @@ module.exports = {
   forgotPassword,
   resetPassword,
   changePassword,
+  deleteAccount,
   updateProfile,
   toPublicUser,
 };

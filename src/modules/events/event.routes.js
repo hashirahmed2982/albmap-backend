@@ -1,7 +1,7 @@
 const express = require('express');
 const { body } = require('express-validator');
 const validate = require('../../middleware/validate');
-const { requireAuth } = require('../../middleware/auth');
+const { requireAuth, optionalAuth } = require('../../middleware/auth');
 const upload = require('../../middleware/upload');
 const env = require('../../config/env');
 const asyncHandler = require('../../utils/asyncHandler');
@@ -10,8 +10,11 @@ const controller = require('./event.controller');
 
 const router = express.Router();
 
-router.get('/', controller.getEvents);
-router.get('/:id', controller.getEventById);
+// optionalAuth (not requireAuth): browsing events never requires login,
+// but a logged-in caller gets `isInterested` computed for them on each
+// event — see event.service.js's getEvents/getEventById.
+router.get('/', optionalAuth, controller.getEvents);
+router.get('/:id', optionalAuth, controller.getEventById);
 
 router.post(
   '/',
@@ -25,6 +28,11 @@ router.post(
   validate,
   controller.createEvent,
 );
+
+// "I'm interested" / RSVP toggle — see event.service.js's addInterest/
+// removeInterest and the event_interests table (schema.sql).
+router.post('/:id/interest', requireAuth, controller.addInterest);
+router.delete('/:id/interest', requireAuth, controller.removeInterest);
 
 /**
  * Pre-upload pattern, same as POST /businesses/logo: upload the poster

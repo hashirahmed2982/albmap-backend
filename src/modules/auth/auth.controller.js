@@ -59,6 +59,12 @@ const changePassword = asyncHandler(async (req, res) => {
   res.json({ message: 'Password changed successfully.' });
 });
 
+const deleteAccount = asyncHandler(async (req, res) => {
+  const { password } = req.body;
+  await authService.deleteAccount(req.user.id, { password });
+  res.status(204).send();
+});
+
 const updateProfile = asyncHandler(async (req, res) => {
   const { name, phone, profileImageUrl } = req.body;
   const user = await authService.updateProfile(req.user.id, { name, phone, profileImageUrl });
@@ -76,5 +82,6 @@ module.exports = {
   forgotPassword,
   resetPassword,
   changePassword,
+  deleteAccount,
   updateProfile,
 };

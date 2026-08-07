@@ -15,6 +15,12 @@ function toPublicEvent(row) {
     startTime: row.start_time,
     endTime: row.end_time,
     imageUrl: row.image_url,
+    // Only present when the query that produced `row` joined
+    // event_interests (see getEvents/getEventById below) — absent
+    // elsewhere (e.g. the admin event mapper), hence the `?? 0`/`!!`
+    // rather than assuming these columns always exist.
+    interestCount: row.interest_count != null ? Number(row.interest_count) : 0,
+    isInterested: !!row.is_interested,
   };
 }
 
@@ -33,18 +39,26 @@ function toMysqlDatetime(isoString) {
   return date.toISOString().slice(0, 19).replace('T', ' ');
 }
 
-async function getEvents({ category, businessId, from, to, page, limit }) {
+async function getEvents({ category, businessId, from, to, page, limit, userId }) {
   const pageLimit = Math.min(Math.max(parseInt(limit, 10) || 20, 1), 100);
   const pageNum = Math.max(parseInt(page, 10) || 1, 1);
   const offset = (pageNum - 1) * pageLimit;
 
+  // `user_id = ?` against a NULL/undefined userId (an anonymous/guest
+  // caller — this route uses optionalAuth, not requireAuth) never
+  // matches in SQL, so isInterested correctly comes back false without
+  // needing a separate branch for the unauthenticated case.
   let sql = `
-    SELECT SQL_CALC_FOUND_ROWS e.*, b.name AS business_name
+    SELECT SQL_CALC_FOUND_ROWS e.*, b.name AS business_name,
+           (SELECT COUNT(*) FROM event_interests ei WHERE ei.event_id = e.id) AS interest_count,
+           EXISTS(
+             SELECT 1 FROM event_interests ei2 WHERE ei2.event_id = e.id AND ei2.user_id = ?
+           ) AS is_interested
     FROM events e
     JOIN businesses b ON b.id = e.business_id
     WHERE e.is_active = 1 AND b.status = 'approved'
   `;
-  const params = [];
+  const params = [userId || null];
 
   if (category) {
     sql += ' AND e.category = ?';
@@ -75,15 +89,45 @@ async function getEvents({ category, businessId, from, to, page, limit }) {
   };
 }
 
-async function getEventById(id) {
+async function getEventById(id, userId) {
   const [rows] = await pool.query(
-    `SELECT e.*, b.name AS business_name FROM events e
+    `SELECT e.*, b.name AS business_name,
+            (SELECT COUNT(*) FROM event_interests ei WHERE ei.event_id = e.id) AS interest_count,
+            EXISTS(
+              SELECT 1 FROM event_interests ei2 WHERE ei2.event_id = e.id AND ei2.user_id = ?
+            ) AS is_interested
+     FROM events e
      JOIN businesses b ON b.id = e.business_id
      WHERE e.id = ? LIMIT 1`,
-    [id],
+    [userId || null, id],
   );
   if (rows.length === 0) throw ApiError.notFound('Event not found');
   return toPublicEvent(rows[0]);
+}
+
+/**
+ * "I'm interested" / RSVP toggle — idempotent in both directions, same
+ * as favorites: marking interest twice or removing it when it was never
+ * set isn't an error, just a no-op.
+ */
+async function addInterest(userId, eventId) {
+  const [eventRows] = await pool.query('SELECT id FROM events WHERE id = ?', [eventId]);
+  if (eventRows.length === 0) throw ApiError.notFound('Event not found');
+
+  const [existing] = await pool.query(
+    'SELECT id FROM event_interests WHERE user_id = ? AND event_id = ?',
+    [userId, eventId],
+  );
+  if (existing.length > 0) return;
+
+  await pool.query(
+    'INSERT INTO event_interests (id, user_id, event_id) VALUES (?, ?, ?)',
+    [uuidv4(), userId, eventId],
+  );
+}
+
+async function removeInterest(userId, eventId) {
+  await pool.query('DELETE FROM event_interests WHERE user_id = ? AND event_id = ?', [userId, eventId]);
 }
 
 /**
@@ -159,4 +203,12 @@ function toAdminEvent(row) {
   };
 }
 
-module.exports = { getEvents, getEventById, createEvent, toPublicEvent, toAdminEvent };
+module.exports = {
+  getEvents,
+  getEventById,
+  createEvent,
+  addInterest,
+  removeInterest,
+  toPublicEvent,
+  toAdminEvent,
+};

@@ -1,5 +1,24 @@
 # AlbMap Backend
 
+## Latest pass (self-service account deletion, event favorites, event interest/RSVP)
+
+Three additions, all mirroring existing patterns closely (see §5/§6 for
+details): `DELETE /auth/me` (permanent self-service account deletion —
+required for App Store review, since account creation exists in-app;
+previously there was no path to this at all), event favorites now sync
+server-side the same way business favorites already did (previously
+local-only on the mobile app, lost on reinstall/device switch — see
+`event_favorites`), and an "I'm interested"/RSVP toggle on events
+(`event_interests`, surfaced as `interestCount`/`isInterested` on
+`GET /events` and `GET /events/:id`).
+
+**Unlike the pass below, this one has NOT been live-tested against a real
+MySQL instance** (no database was available in the environment this was
+written in) — it's been checked for syntax correctness and that the full
+Express route tree loads without error, but run `npm run db:migrate`
+and exercise these three endpoints with real requests before trusting
+them in production.
+
 ## Recent gap-fix pass (all live-tested against real MySQL)
 
 Change password, edit profile, avatar upload, event image upload,
@@ -124,6 +143,9 @@ All routes are prefixed with `/v1`. `🔒` = requires `Authorization: Bearer
 | POST | `/auth/refresh` | `{ refreshToken }` → `{ accessToken }` |
 | POST | `/auth/logout` | `{ refreshToken }` → revokes it |
 | GET | `/auth/me` 🔒 | Current user |
+| PATCH | `/auth/me` 🔒 | `{ name?, phone?, profileImageUrl? }` — partial update |
+| POST | `/auth/change-password` 🔒 | `{ currentPassword, newPassword }` — revokes every other session |
+| DELETE | `/auth/me` 🔒 | `{ password? }` (required for password accounts, omit for social-login-only) — **permanent**, deletes the account and, via cascade, every business/event/review/favorite that references it. See the doc comment on `authService.deleteAccount`. |
 | POST | `/auth/forgot-password` | `{ email }` → always 200 (doesn't leak which emails exist); logs a reset token to console — see §7 |
 
 ### Businesses
@@ -140,9 +162,29 @@ All routes are prefixed with `/v1`. `🔒` = requires `Authorization: Bearer
 ### Events
 | Method | Path | Notes |
 |---|---|---|
-| GET | `/events` | Query: `category`, `businessId`, `from`, `to` (ISO 8601) |
-| GET | `/events/:id` | Single event |
+| GET | `/events` | Query: `category`, `businessId`, `from`, `to` (ISO 8601). Optionally authenticated — each event includes `interestCount`, and `isInterested` if a valid token was sent |
+| GET | `/events/:id` | Single event, same optional-auth `isInterested` behavior |
 | POST | `/events` 🔒 | Caller must own the business, which must be approved |
+| POST | `/events/image` 🔒 | Multipart upload (`image` field) → `{ url }`, include the result as `imageUrl` in `POST /events` |
+| POST | `/events/:id/interest` 🔒 | Mark "I'm interested" — idempotent |
+| DELETE | `/events/:id/interest` 🔒 | Remove interest — idempotent |
+
+### Reviews
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/businesses/:id/reviews?page=&limit=` | Public. Newest first |
+| POST | `/businesses/:id/reviews` 🔒 | `{ rating: 1-5, comment? }` — one review per user per business; submitting again edits your existing review rather than erroring. Recalculates that business's `rating_avg`/`rating_count` |
+| DELETE | `/businesses/:id/reviews` 🔒 | Deletes the caller's own review for this business |
+
+### Favorites
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/favorites` 🔒 | Full business objects the caller has favorited |
+| POST | `/favorites` 🔒 | `{ businessId }` — idempotent |
+| DELETE | `/favorites/:businessId` 🔒 | Idempotent |
+| GET | `/favorites/events` 🔒 | Full event objects the caller has favorited |
+| POST | `/favorites/events` 🔒 | `{ eventId }` — idempotent |
+| DELETE | `/favorites/events/:eventId` 🔒 | Idempotent |
 
 ### Analytics (Dashboard)
 | Method | Path | Notes |
@@ -178,11 +220,13 @@ All routes are prefixed with `/v1`. `🔒` = requires `Authorization: Bearer
 
 ## 6. Database schema
 
-See `src/db/schema.sql` for the full DDL with comments. Ten tables:
+See `src/db/schema.sql` for the full DDL with comments. Fifteen tables:
 `users`, `password_reset_tokens`, `refresh_tokens`, `categories`,
 `businesses`, `business_status_history` (audit trail), `business_analytics`
 (aggregate counters), `business_analytics_daily` (feeds the 7-day chart),
-`events`, `notifications`.
+`events`, `notifications`, `notification_reads` (per-user read tracking),
+`reviews`, `favorites` (businesses), `event_favorites`, `event_interests`
+(the "I'm interested"/RSVP signal).
 
 No ORM — plain `mysql2` with parameterized queries throughout. This was a
 deliberate choice for transparency (every query is visible SQL, nothing
@@ -216,11 +260,6 @@ is silently fake:
   storage engine for `multer-s3` (or similar) when you need multi-server
   or CDN-backed storage. Nothing else needs to change — routes/controllers
   only ever see the resulting URL.
-- **Rating submission** — `businesses.rating_avg`/`rating_count` columns
-  exist and are read by the API, but there's no endpoint to actually submit
-  a rating yet (wasn't in the original mobile app scope). Add a
-  `reviews` table + `POST /businesses/:id/reviews` when you're ready for
-  that feature.
 
 ## 8. Known dependency advisory (not exploitable here)
 
