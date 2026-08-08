@@ -7,6 +7,7 @@ const eventService = require('../events/event.service');
 const categoryService = require('../categories/category.service');
 const notificationService = require('../notifications/notification.service');
 const contentService = require('../content/content.service');
+const emailService = require('../notifications/email');
 
 // ---------------- Dashboard ----------------
 
@@ -134,16 +135,23 @@ async function getAllBusinesses({ status, search, dateFrom, dateTo, page, limit,
     sql += ' AND b.name LIKE ?';
     params.push(`%${search}%`);
   }
-  // dateTo is a plain "YYYY-MM-DD" from the admin portal's date picker —
-  // treated as inclusive of the whole day (< the next day), not just
-  // midnight, or picking a range that includes today would silently
-  // exclude everything submitted today.
+  // dateFrom/dateTo arrive as exact "YYYY-MM-DD HH:MM:SS" UTC boundaries,
+  // already converted client-side from the admin's own local calendar-day
+  // selection (see admin1's lib/dates.ts localDateRangeToUtcBounds) —
+  // created_at is stored as a naive UTC datetime (no zone marker), so
+  // comparing it against a bare "YYYY-MM-DD" directly here would silently
+  // use MySQL's own notion of midnight for that date (i.e. UTC midnight),
+  // not the admin's local midnight. That mismatch was the actual bug:
+  // "today" in the picker could exclude/include a few hours of businesses
+  // near midnight depending on the admin's own timezone offset. dateTo is
+  // already the exclusive upper bound (local midnight of the day AFTER
+  // the picked end date, in UTC) — no DATE_ADD needed here anymore.
   if (dateFrom) {
     sql += ' AND b.created_at >= ?';
     params.push(dateFrom);
   }
   if (dateTo) {
-    sql += ' AND b.created_at < DATE_ADD(?, INTERVAL 1 DAY)';
+    sql += ' AND b.created_at < ?';
     params.push(dateTo);
   }
   sql += ` ORDER BY ${resolveSort(sortBy, sortOrder, BUSINESS_SORT_COLUMNS, 'createdAt')} LIMIT ? OFFSET ?`;
@@ -185,16 +193,66 @@ async function reviewBusiness(businessId, adminId, decision, reason) {
 
   await notificationService.notifyBusinessStatusChange(businessId, business.owner_id, decision, reason);
 
-  return businessService.getBusinessById(businessId);
+  const updated = await businessService.getBusinessById(businessId);
+
+  // Fire-and-forget — same reasoning as everywhere else email gets sent
+  // from this codebase (submitBusiness, forgotPassword, ...): a slow or
+  // failed send should never delay or break the actual review response,
+  // and sendEmail() already catches its own errors internally.
+  const [ownerRows] = await pool.query('SELECT name, email FROM users WHERE id = ?', [business.owner_id]);
+  const owner = ownerRows[0];
+  if (owner) {
+    if (decision === 'approved') {
+      emailService.sendBusinessApprovedEmail(owner, updated);
+    } else {
+      emailService.sendBusinessRejectedEmail(owner, updated, reason);
+    }
+  }
+
+  return updated;
 }
 
-async function deactivateBusiness(businessId, isActive) {
-  const [result] = await pool.query('UPDATE businesses SET is_active = ? WHERE id = ?', [
-    isActive ? 1 : 0,
-    businessId,
-  ]);
-  if (result.affectedRows === 0) throw ApiError.notFound('Business not found');
-  return businessService.getBusinessById(businessId);
+async function deactivateBusiness(businessId, isActive, adminId) {
+  const [existingRows] = await pool.query('SELECT * FROM businesses WHERE id = ?', [businessId]);
+  const existing = existingRows[0];
+  if (!existing) throw ApiError.notFound('Business not found');
+
+  // No-op if it's already in the requested state — avoids a spurious
+  // "reactivated" email (and a pointless history row) from, say, two
+  // admin tabs both submitting a stale "Deactivate" click.
+  const wasActive = !!existing.is_active;
+  if (wasActive === isActive) {
+    return businessService.getBusinessById(businessId);
+  }
+
+  await pool.query('UPDATE businesses SET is_active = ? WHERE id = ?', [isActive ? 1 : 0, businessId]);
+
+  await pool.query(
+    `INSERT INTO business_status_history (id, business_id, old_status, new_status, reason, changed_by)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+    [
+      uuidv4(),
+      businessId,
+      existing.status,
+      existing.status,
+      isActive ? 'Reactivated by admin' : 'Deactivated by admin',
+      adminId || null,
+    ],
+  );
+
+  const updated = await businessService.getBusinessById(businessId);
+
+  const [ownerRows] = await pool.query('SELECT name, email FROM users WHERE id = ?', [existing.owner_id]);
+  const owner = ownerRows[0];
+  if (owner) {
+    if (isActive) {
+      emailService.sendBusinessReactivatedEmail(owner, updated);
+    } else {
+      emailService.sendBusinessDeactivatedEmail(owner, updated);
+    }
+  }
+
+  return updated;
 }
 
 // ---------------- User management ----------------
@@ -210,12 +268,15 @@ async function getAllUsers({ search, dateFrom, dateTo, page, limit, sortBy, sort
     sql += ' AND (name LIKE ? OR email LIKE ?)';
     params.push(`%${search}%`, `%${search}%`);
   }
+  // See getAllBusinesses' comment above — dateFrom/dateTo are already
+  // precise UTC boundaries computed client-side from the admin's local
+  // calendar-day selection, not bare dates.
   if (dateFrom) {
     sql += ' AND created_at >= ?';
     params.push(dateFrom);
   }
   if (dateTo) {
-    sql += ' AND created_at < DATE_ADD(?, INTERVAL 1 DAY)';
+    sql += ' AND created_at < ?';
     params.push(dateTo);
   }
   sql += ` ORDER BY ${resolveSort(sortBy, sortOrder, USER_SORT_COLUMNS, 'createdAt')} LIMIT ? OFFSET ?`;
@@ -269,12 +330,13 @@ async function getAllEvents({ search, dateFrom, dateTo, page, limit, sortBy, sor
   // submitted — the table's own "Starts"/"Ends" columns are what an
   // admin actually orients by here, unlike businesses/users where
   // "submitted/joined on" (created_at) is the meaningful date.
+  // Same UTC-boundary contract as getAllBusinesses/getAllUsers above.
   if (dateFrom) {
     sql += ' AND e.start_time >= ?';
     params.push(dateFrom);
   }
   if (dateTo) {
-    sql += ' AND e.start_time < DATE_ADD(?, INTERVAL 1 DAY)';
+    sql += ' AND e.start_time < ?';
     params.push(dateTo);
   }
   sql += ` ORDER BY ${resolveSort(sortBy, sortOrder, EVENT_SORT_COLUMNS, 'startTime')} LIMIT ? OFFSET ?`;

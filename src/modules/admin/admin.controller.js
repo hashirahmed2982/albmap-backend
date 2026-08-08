@@ -29,7 +29,7 @@ const reviewBusiness = asyncHandler(async (req, res) => {
 });
 
 const setBusinessActive = asyncHandler(async (req, res) => {
-  const business = await adminService.deactivateBusiness(req.params.id, req.body.isActive);
+  const business = await adminService.deactivateBusiness(req.params.id, req.body.isActive, req.user.id);
   res.json(business);
 });
 

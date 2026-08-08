@@ -41,6 +41,20 @@ function toPublicBusiness(row) {
   };
 }
 
+/**
+ * toPublicBusiness() + isActive — used for an owner's own view of their
+ * businesses (getMyBusinesses), where "approved but deactivated by an
+ * admin" needs to actually be visible to the owner as a distinct state
+ * from a normal live listing. Deliberately NOT part of toPublicBusiness
+ * itself: the public discovery feed (getBusinesses/searchBusinesses)
+ * only ever returns approved+active rows in the first place, so
+ * isActive would always be redundantly `true` there — this field only
+ * carries real information for the owner's own dashboard.
+ */
+function toOwnerBusiness(row) {
+  return { ...toPublicBusiness(row), isActive: !!row.is_active };
+}
+
 // Fields that materially change what a business claims to be — editing any
 // of these on an already-approved listing puts it back into the pending
 // queue for re-review. Cosmetic/operational fields (phone, hours, tags,
@@ -181,7 +195,7 @@ async function getMyBusinesses(ownerId) {
     'SELECT * FROM businesses WHERE owner_id = ? ORDER BY created_at DESC',
     [ownerId],
   );
-  return rows.map(toPublicBusiness);
+  return rows.map(toOwnerBusiness);
 }
 
 /**
@@ -332,10 +346,26 @@ async function updateOwnBusiness(businessId, ownerId, data) {
     params.push(JSON.stringify(data.tags));
   }
 
-  const shouldResetToPending = existing.status === 'approved' && touchesSensitiveField;
+  // A rejected listing resets to pending on ANY edit, not just a
+  // sensitive-field one — unlike an already-live approved listing (which
+  // only needs re-review if what it fundamentally claims to be changed),
+  // a rejected one is sitting there specifically waiting for the owner
+  // to fix whatever the admin flagged and resubmit. Without this, the
+  // owner's fix never leaves 'rejected' — it doesn't reappear in the
+  // admin's Pending Review queue, so nothing short of a direct DB edit
+  // ever gets it back in front of a reviewer.
+  const wasRejected = existing.status === 'rejected';
+  const shouldResetToPending = (existing.status === 'approved' && touchesSensitiveField) || wasRejected;
   if (shouldResetToPending) {
     updates.push('status = ?');
     params.push('pending');
+    if (wasRejected) {
+      // Clear the stale reason from last time — it shouldn't linger and
+      // read as "still rejected for X" once this has actually been
+      // resubmitted and is waiting on a fresh decision.
+      updates.push('rejection_reason = ?');
+      params.push(null);
+    }
   }
 
   if (updates.length === 0) return toPublicBusiness(existing);
@@ -346,8 +376,14 @@ async function updateOwnBusiness(businessId, ownerId, data) {
   if (shouldResetToPending) {
     await pool.query(
       `INSERT INTO business_status_history (id, business_id, old_status, new_status, reason, changed_by)
-       VALUES (?, ?, 'approved', 'pending', 'Edited after approval — re-review required', ?)`,
-      [uuidv4(), businessId, ownerId],
+       VALUES (?, ?, ?, 'pending', ?, ?)`,
+      [
+        uuidv4(),
+        businessId,
+        existing.status,
+        wasRejected ? 'Owner edited and resubmitted after rejection' : 'Edited after approval — re-review required',
+        ownerId,
+      ],
     );
   }
 
