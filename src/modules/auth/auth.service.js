@@ -18,6 +18,12 @@ const emailService = require('../notifications/email');
 // Date and reason about server-timezone-vs-Node-timezone consistency.
 const ADMIN_IDLE_LIMIT_MINUTES = 15;
 
+// Signup-by-email-OTP tuning (mobile app + website password signup only —
+// see requestSignupOtp/verifySignupOtp).
+const SIGNUP_OTP_EXPIRY_MINUTES = 10;
+const SIGNUP_OTP_MAX_ATTEMPTS = 5;
+const SIGNUP_OTP_RESEND_COOLDOWN_SECONDS = 60;
+
 function toPublicUser(row) {
   return {
     id: row.id,
@@ -43,30 +49,111 @@ async function issueTokenPair(userId) {
   return { accessToken, refreshToken };
 }
 
-async function signup({ email, password, name }) {
+/**
+ * Step 1 of password signup (mobile app + website) — does NOT create a
+ * `users` row. Only social login (Google/Facebook, whose provider has
+ * already verified the email) and this OTP flow's step 2 ever insert
+ * into `users` for a new account; a plain POST here can no longer create
+ * an unverified account the way it used to, which is the actual point:
+ * the email has to be proven real, or no account ever exists for it.
+ *
+ * Re-calling this for the same still-unverified email (e.g. "Resend
+ * code", or fixing a typo'd password before re-submitting) is supported
+ * and expected — it just replaces the pending row with a fresh OTP +
+ * fresh password/name, rather than needing a separate endpoint.
+ */
+async function requestSignupOtp({ email, password, name }) {
   const [existing] = await pool.query('SELECT id FROM users WHERE email = ? LIMIT 1', [email]);
   if (existing.length > 0) {
     throw ApiError.conflict('An account with this email already exists');
   }
 
-  const passwordHash = await bcrypt.hash(password, 10);
-  const userId = uuidv4();
+  const [recent] = await pool.query(
+    `SELECT id FROM signup_otps
+     WHERE email = ? AND created_at > DATE_SUB(NOW(), INTERVAL ? SECOND)
+     LIMIT 1`,
+    [email, SIGNUP_OTP_RESEND_COOLDOWN_SECONDS],
+  );
+  if (recent.length > 0) {
+    throw ApiError.badRequest('A code was just sent — please wait a bit before requesting another.');
+  }
 
+  const passwordHash = await bcrypt.hash(password, 10);
+  // crypto.randomInt (not Math.random) — this gates account creation, so
+  // it needs to be unguessable the same way a password reset token is.
+  const otp = String(crypto.randomInt(0, 1_000_000)).padStart(6, '0');
+  const otpHash = hashToken(otp);
+
+  // One pending signup per email at a time — a fresh request (typo'd
+  // password, "resend code", or a stale abandoned attempt) always
+  // replaces whatever was there before rather than piling up rows.
+  await pool.query('DELETE FROM signup_otps WHERE email = ?', [email]);
   await pool.query(
-    `INSERT INTO users (id, email, password_hash, name, role, auth_provider)
-     VALUES (?, ?, ?, ?, 'business', 'password')`,
-    [userId, email, passwordHash, name],
+    `INSERT INTO signup_otps (id, email, otp_hash, password_hash, name, expires_at)
+     VALUES (?, ?, ?, ?, ?, DATE_ADD(NOW(), INTERVAL ? MINUTE))`,
+    [uuidv4(), email, otpHash, passwordHash, name, SIGNUP_OTP_EXPIRY_MINUTES],
   );
 
-  const [rows] = await pool.query('SELECT * FROM users WHERE id = ?', [userId]);
+  await emailService.sendSignupOtpEmail(email, name, otp);
+}
+
+/**
+ * Step 2 — the only place a password-signup `users` row actually gets
+ * created. Marks is_email_verified straight away, since successfully
+ * entering the code IS the verification (unlike the default signed-up-
+ * via-password state, which starts unverified).
+ */
+async function verifySignupOtp({ email, otp }) {
+  const [rows] = await pool.query(
+    'SELECT *, (expires_at < NOW()) AS is_expired FROM signup_otps WHERE email = ? ORDER BY created_at DESC LIMIT 1',
+    [email],
+  );
+  const pending = rows[0];
+  if (!pending) {
+    throw ApiError.badRequest('No pending signup found for this email — please sign up again.');
+  }
+
+  if (pending.is_expired) {
+    await pool.query('DELETE FROM signup_otps WHERE id = ?', [pending.id]);
+    throw ApiError.badRequest('This code has expired — please request a new one.');
+  }
+
+  if (pending.attempts >= SIGNUP_OTP_MAX_ATTEMPTS) {
+    await pool.query('DELETE FROM signup_otps WHERE id = ?', [pending.id]);
+    throw ApiError.badRequest('Too many incorrect attempts — please request a new code.');
+  }
+
+  if (hashToken(otp) !== pending.otp_hash) {
+    await pool.query('UPDATE signup_otps SET attempts = attempts + 1 WHERE id = ?', [pending.id]);
+    throw ApiError.badRequest('Incorrect code.');
+  }
+
+  // Re-check for a race: someone could have registered this email a
+  // different way (e.g. social login) in the minutes between requesting
+  // and entering the code.
+  const [existing] = await pool.query('SELECT id FROM users WHERE email = ? LIMIT 1', [email]);
+  if (existing.length > 0) {
+    await pool.query('DELETE FROM signup_otps WHERE id = ?', [pending.id]);
+    throw ApiError.conflict('An account with this email already exists');
+  }
+
+  const userId = uuidv4();
+  await pool.query(
+    `INSERT INTO users (id, email, password_hash, name, role, auth_provider, is_email_verified)
+     VALUES (?, ?, ?, ?, 'business', 'password', 1)`,
+    [userId, email, pending.password_hash, pending.name],
+  );
+  await pool.query('DELETE FROM signup_otps WHERE id = ?', [pending.id]);
+
+  const [userRows] = await pool.query('SELECT * FROM users WHERE id = ?', [userId]);
   const tokens = await issueTokenPair(userId);
 
   // Fire-and-forget — a slow or failed email should never delay or break
   // the signup response itself. emailService.sendWelcomeEmail already
   // catches its own errors internally and never throws.
-  emailService.sendWelcomeEmail(rows[0]);
+  emailService.sendWelcomeEmail(userRows[0]);
 
-  return { user: toPublicUser(rows[0]), ...tokens };
+  return { user: toPublicUser(userRows[0]), ...tokens };
 }
 
 async function login({ email, password }) {
@@ -466,7 +553,8 @@ async function updateProfile(userId, { name, phone, profileImageUrl }) {
 }
 
 module.exports = {
-  signup,
+  requestSignupOtp,
+  verifySignupOtp,
   login,
   loginWithGoogle,
   loginWithFacebook,

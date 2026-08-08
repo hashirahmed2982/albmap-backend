@@ -30,10 +30,23 @@ async function cleanupExpiredTokens() {
   return result.affectedRows;
 }
 
+/**
+ * Same idea, for signup_otps (see auth.service.js's requestSignupOtp) —
+ * these expire after 10 minutes, so almost every row here is junk within
+ * an hour of being created; abandoned/never-verified signup attempts
+ * otherwise pile up forever with nothing else ever deleting them.
+ */
+async function cleanupExpiredSignupOtps() {
+  const [result] = await pool.query(
+    'DELETE FROM signup_otps WHERE expires_at < DATE_SUB(NOW(), INTERVAL 1 HOUR)',
+  );
+  return result.affectedRows;
+}
+
 if (require.main === module) {
-  cleanupExpiredTokens()
-    .then((count) => {
-      console.log(`✅ Cleaned up ${count} expired/revoked refresh tokens`);
+  Promise.all([cleanupExpiredTokens(), cleanupExpiredSignupOtps()])
+    .then(([tokenCount, otpCount]) => {
+      console.log(`✅ Cleaned up ${tokenCount} expired/revoked refresh tokens, ${otpCount} expired signup OTPs`);
       process.exit(0);
     })
     .catch((err) => {
@@ -42,4 +55,4 @@ if (require.main === module) {
     });
 }
 
-module.exports = { cleanupExpiredTokens };
+module.exports = { cleanupExpiredTokens, cleanupExpiredSignupOtps };

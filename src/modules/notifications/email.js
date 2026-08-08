@@ -75,6 +75,33 @@ async function sendWelcomeEmail(user) {
   });
 }
 
+/**
+ * The code is deliberately also in the subject line (not just the body) —
+ * two reasons: it lets someone confirm the code from a notification
+ * preview without opening the email, and it means this code shows up for
+ * free in sendEmail's "[EMAIL DISABLED] Would send ..." console fallback
+ * when SMTP isn't configured, so local/dev testing doesn't need any
+ * separate logging.
+ */
+async function sendSignupOtpEmail(email, name, otp) {
+  return sendEmail({
+    to: email,
+    subject: `${otp} is your AlbMap verification code`,
+    html: emailWrapper(`
+      <h1 style="font-size: 20px; color: #1A1D1C;">Verify your email</h1>
+      <p style="color: #52514D; line-height: 1.6;">
+        Hi ${name}, enter this code to finish creating your AlbMap account. It expires in 10 minutes.
+      </p>
+      <p style="font-size: 32px; font-weight: 700; letter-spacing: 8px; color: #1A1D1C; margin: 24px 0;">${otp}</p>
+      <p style="color: #8A8880; font-size: 13px;">
+        If you didn't try to sign up for AlbMap, you can safely ignore this email — no account has
+        been created yet.
+      </p>
+    `),
+    text: `Your AlbMap verification code is ${otp}. It expires in 10 minutes.`,
+  });
+}
+
 async function sendBusinessSubmittedEmail(user, business) {
   return sendEmail({
     to: user.email,
@@ -160,6 +187,7 @@ async function sendContactFormEmail({ name, email, inquiryType, message }) {
 
 module.exports = {
   sendWelcomeEmail,
+  sendSignupOtpEmail,
   sendBusinessSubmittedEmail,
   sendAdminNewBusinessNotification,
   sendPasswordResetEmail,

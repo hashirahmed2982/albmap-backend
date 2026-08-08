@@ -1,7 +1,7 @@
 const app = require('./app');
 const env = require('./config/env');
 const { testConnection } = require('./config/db');
-const { cleanupExpiredTokens } = require('./db/cleanup-tokens');
+const { cleanupExpiredTokens, cleanupExpiredSignupOtps } = require('./db/cleanup-tokens');
 process.on('unhandledRejection', (reason) => {
   console.error('⚠️  Unhandled promise rejection (server staying up):', reason);
 });
@@ -35,6 +35,11 @@ async function start() {
         if (count > 0) console.log(`🧹 Cleaned up ${count} expired refresh tokens`);
       })
       .catch((err) => console.error('Token cleanup failed:', err.message));
+    cleanupExpiredSignupOtps()
+      .then((count) => {
+        if (count > 0) console.log(`🧹 Cleaned up ${count} expired signup OTPs`);
+      })
+      .catch((err) => console.error('Signup OTP cleanup failed:', err.message));
   }, TOKEN_CLEANUP_INTERVAL_MS);
 }
 
