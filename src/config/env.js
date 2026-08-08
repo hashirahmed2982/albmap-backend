@@ -55,7 +55,14 @@ const env = {
     port: parseInt(process.env.SMTP_PORT || '2525', 10),
     user: process.env.SMTP_USER || null,
     password: process.env.SMTP_PASSWORD || null,
-    fromAddress: process.env.SMTP_FROM_ADDRESS || 'AlbMap <no-reply@albmap.app>',
+    // Must be a domain actually verified with whatever SMTP_HOST provider
+    // is configured (SPF/DKIM, marked verified in their dashboard) — the
+    // bare apex domain (no-reply@albmap.app) is NOT automatically covered
+    // by verifying a subdomain like mail.albmap.app, and sending from an
+    // unverified domain gets the whole send rejected with a 550. This
+    // default matches the subdomain actually verified for this project;
+    // override via SMTP_FROM_ADDRESS if that ever changes.
+    fromAddress: process.env.SMTP_FROM_ADDRESS || 'AlbMap <no-reply@mail.albmap.app>',
     adminNotificationEmail: process.env.ADMIN_NOTIFICATION_EMAIL || null,
   },
 
