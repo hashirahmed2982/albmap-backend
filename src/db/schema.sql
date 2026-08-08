@@ -43,6 +43,29 @@ CREATE TABLE IF NOT EXISTS users (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ---------------------------------------------------------------------------
+-- signup_otps — email-verification-before-account-creation for password
+-- signups (mobile app + website). No `users` row exists yet at this
+-- point — the whole point is to prove the email is real *before* it
+-- occupies that unique slot, so a mistyped/fake address never blocks
+-- someone else from signing up with their own real one later. Holds the
+-- pending account's hashed password + name until the OTP is verified, at
+-- which point auth.service.js's verifySignupOtp() creates the actual
+-- user row and deletes this one (single-use).
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS signup_otps (
+  id            VARCHAR(36)  NOT NULL PRIMARY KEY,
+  email         VARCHAR(255) NOT NULL,
+  otp_hash      VARCHAR(255) NOT NULL,
+  password_hash VARCHAR(255) NOT NULL,
+  name          VARCHAR(150) NOT NULL,
+  attempts      INT          NOT NULL DEFAULT 0,
+  expires_at    DATETIME     NOT NULL,
+  created_at    DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+  INDEX idx_signup_otps_email (email)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ---------------------------------------------------------------------------
 -- password_reset_tokens — short-lived tokens for the forgot-password flow.
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS password_reset_tokens (

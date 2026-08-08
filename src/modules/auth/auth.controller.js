@@ -3,7 +3,16 @@ const authService = require('./auth.service');
 
 const signup = asyncHandler(async (req, res) => {
   const { email, password, name } = req.body;
-  const result = await authService.signup({ email, password, name });
+  await authService.requestSignupOtp({ email, password, name });
+  // Deliberately no user/token payload — no account exists yet. The
+  // client's next step is to show an "enter the code we emailed you"
+  // screen and call POST /auth/signup/verify.
+  res.json({ message: 'Verification code sent to your email.' });
+});
+
+const verifySignup = asyncHandler(async (req, res) => {
+  const { email, otp } = req.body;
+  const result = await authService.verifySignupOtp({ email, otp });
   res.status(201).json(result);
 });
 
@@ -73,6 +82,7 @@ const updateProfile = asyncHandler(async (req, res) => {
 
 module.exports = {
   signup,
+  verifySignup,
   login,
   loginWithGoogle,
   loginWithFacebook,

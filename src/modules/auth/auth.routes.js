@@ -6,6 +6,8 @@ const controller = require('./auth.controller');
 
 const router = express.Router();
 
+// Step 1 of signup — emails a code, doesn't create an account yet. Safe
+// to call again for the same email (typo'd password, "resend code").
 router.post(
   '/signup',
   [
@@ -15,6 +17,18 @@ router.post(
   ],
   validate,
   controller.signup,
+);
+
+// Step 2 — the code from that email. Only this actually creates the
+// account and returns tokens.
+router.post(
+  '/signup/verify',
+  [
+    body('email').isEmail().withMessage('A valid email is required').normalizeEmail(),
+    body('otp').trim().isLength({ min: 6, max: 6 }).isNumeric().withMessage('Enter the 6-digit code'),
+  ],
+  validate,
+  controller.verifySignup,
 );
 
 router.post(
