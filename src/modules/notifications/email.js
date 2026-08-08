@@ -119,6 +119,83 @@ async function sendBusinessSubmittedEmail(user, business) {
 }
 
 /**
+ * The four business-lifecycle emails below (approved/rejected/
+ * deactivated/reactivated) are the actual notification an owner gets for
+ * each admin decision — before this, admin.service.js only ever recorded
+ * an in-app notification + a mobile push (see notification.service.js's
+ * notifyBusinessStatusChange), which a business owner who primarily uses
+ * the website and doesn't have the app installed would simply never see.
+ * Fire-and-forget from the caller, same as every other email here —
+ * sendEmail() already never throws.
+ */
+async function sendBusinessApprovedEmail(user, business) {
+  const dashboardLink = `${env.websiteUrl}/dashboard`;
+  return sendEmail({
+    to: user.email,
+    subject: `"${business.name}" is now live on AlbMap! 🎉`,
+    html: emailWrapper(`
+      <h1 style="font-size: 20px; color: #1A1D1C;">Your business was approved</h1>
+      <p style="color: #52514D; line-height: 1.6;">
+        "<strong>${business.name}</strong>" has been approved and is now visible to everyone on
+        AlbMap.
+      </p>
+      <a href="${dashboardLink}" style="display: inline-block; margin-top: 16px; padding: 12px 24px; background: #E31320; color: white; text-decoration: none; border-radius: 999px; font-weight: 600;">View my businesses</a>
+    `),
+    text: `"${business.name}" has been approved and is now live on AlbMap. ${dashboardLink}`,
+  });
+}
+
+async function sendBusinessRejectedEmail(user, business, reason) {
+  const dashboardLink = `${env.websiteUrl}/dashboard`;
+  return sendEmail({
+    to: user.email,
+    subject: `Update on "${business.name}"`,
+    html: emailWrapper(`
+      <h1 style="font-size: 20px; color: #1A1D1C;">Your submission wasn't approved</h1>
+      <p style="color: #52514D; line-height: 1.6;">
+        "<strong>${business.name}</strong>" was not approved by an AlbMap admin.
+        ${reason ? `<br /><br /><strong>Reason:</strong> ${reason}` : ''}
+      </p>
+      <p style="color: #52514D; line-height: 1.6;">
+        You can edit the listing and resubmit it for review at any time.
+      </p>
+      <a href="${dashboardLink}" style="display: inline-block; margin-top: 16px; padding: 12px 24px; background: #E31320; color: white; text-decoration: none; border-radius: 999px; font-weight: 600;">Edit and resubmit</a>
+    `),
+    text: `"${business.name}" was not approved.${reason ? ` Reason: ${reason}` : ''} Edit and resubmit at ${dashboardLink}`,
+  });
+}
+
+async function sendBusinessDeactivatedEmail(user, business) {
+  return sendEmail({
+    to: user.email,
+    subject: `"${business.name}" has been deactivated`,
+    html: emailWrapper(`
+      <h1 style="font-size: 20px; color: #1A1D1C;">Your listing was deactivated</h1>
+      <p style="color: #52514D; line-height: 1.6;">
+        "<strong>${business.name}</strong>" has been deactivated by an AlbMap admin and is no
+        longer visible on the map or in search. Your listing itself hasn't been deleted — contact
+        AlbMap support if you believe this was a mistake.
+      </p>
+    `),
+    text: `"${business.name}" has been deactivated by an admin and is no longer publicly visible.`,
+  });
+}
+
+async function sendBusinessReactivatedEmail(user, business) {
+  return sendEmail({
+    to: user.email,
+    subject: `"${business.name}" is active again`,
+    html: emailWrapper(`
+      <h1 style="font-size: 20px; color: #1A1D1C;">Your listing was reactivated</h1>
+      <p style="color: #52514D; line-height: 1.6;">
+        "<strong>${business.name}</strong>" has been reactivated and is visible on AlbMap again.
+      </p>
+    `),
+    text: `"${business.name}" has been reactivated and is visible on AlbMap again.`,
+  });
+}
+
+/**
  * Notifies every admin (or a single configured address, if
  * ADMIN_NOTIFICATION_EMAIL is set) that a new business is waiting for
  * review — otherwise the only way an admin would know is by manually
@@ -189,6 +266,10 @@ module.exports = {
   sendWelcomeEmail,
   sendSignupOtpEmail,
   sendBusinessSubmittedEmail,
+  sendBusinessApprovedEmail,
+  sendBusinessRejectedEmail,
+  sendBusinessDeactivatedEmail,
+  sendBusinessReactivatedEmail,
   sendAdminNewBusinessNotification,
   sendPasswordResetEmail,
   sendContactFormEmail,
