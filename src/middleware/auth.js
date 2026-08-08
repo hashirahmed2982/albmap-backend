@@ -36,6 +36,17 @@ async function requireAuth(req, res, next) {
     }
 
     req.user = { id: user.id, email: user.email, role: user.role };
+
+    // Admin-only activity heartbeat — auth.service.js's refresh() reads
+    // this to enforce the admin portal's 15-minute hard idle timeout.
+    // Deliberately scoped to role === 'admin' so every business/mobile
+    // request (far higher volume) doesn't take an extra write it has no
+    // use for. Fire-and-forget: this is a courtesy timestamp update, not
+    // something the current request should ever fail or slow down over.
+    if (user.role === 'admin') {
+      pool.query('UPDATE users SET last_active_at = NOW() WHERE id = ?', [user.id]).catch(() => {});
+    }
+
     next();
   } catch (err) {
     next(err);
