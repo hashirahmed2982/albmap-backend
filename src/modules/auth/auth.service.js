@@ -7,6 +7,17 @@ const ApiError = require('../../utils/ApiError');
 const { signAccessToken, signRefreshToken, verifyRefreshToken, hashToken } = require('../../utils/jwt');
 const emailService = require('../notifications/email');
 
+// Matches the admin portal's own client-side inactivity timer
+// (useInactivityLogout.ts) — kept as a plain constant like that one
+// rather than an env var, since it's a fixed UX decision, not
+// per-deployment config. See refresh()'s comment for how this is
+// actually enforced. In minutes (not ms) because it's fed straight into
+// a MySQL DATE_SUB(NOW(), INTERVAL ? MINUTE) — doing the age comparison
+// in SQL against MySQL's own NOW() sidesteps having to parse the
+// dateStrings-mode DATETIME string this driver returns back into a JS
+// Date and reason about server-timezone-vs-Node-timezone consistency.
+const ADMIN_IDLE_LIMIT_MINUTES = 15;
+
 function toPublicUser(row) {
   return {
     id: row.id,
@@ -258,6 +269,29 @@ async function refresh({ refreshToken }) {
 
   if (rows.length === 0) {
     throw ApiError.unauthorized('Refresh token has been revoked or expired');
+  }
+
+  // Admin portal only: a hard 15-minute idle timeout, enforced here so it
+  // holds even if the browser was closed the whole time — the admin
+  // portal's own client-side inactivity timer only runs while a tab is
+  // open, so this is the backstop for "closed the laptop, came back
+  // later." last_active_at is updated on every authenticated request by
+  // requireAuth, so it reflects real activity, not just how often the
+  // (separately, always-15-minute) access token happens to expire and
+  // get refreshed — an admin using the portal continuously never trips
+  // this, since some request always lands well within the last 15
+  // minutes. Business/mobile/website users are untouched: this whole
+  // block is a no-op for them since last_active_at is never set for
+  // anything but role='admin'.
+  const [userRows] = await pool.query(
+    `SELECT role, (last_active_at IS NOT NULL AND last_active_at < DATE_SUB(NOW(), INTERVAL ? MINUTE)) AS is_idle
+     FROM users WHERE id = ? LIMIT 1`,
+    [ADMIN_IDLE_LIMIT_MINUTES, decoded.sub],
+  );
+  const user = userRows[0];
+  if (user?.role === 'admin' && user.is_idle) {
+    await pool.query('UPDATE refresh_tokens SET revoked_at = NOW() WHERE id = ?', [rows[0].id]);
+    throw ApiError.unauthorized('Session expired after 15 minutes of inactivity');
   }
 
   const accessToken = signAccessToken({ sub: decoded.sub });

@@ -28,6 +28,13 @@ CREATE TABLE IF NOT EXISTS users (
   is_email_verified TINYINT(1) NOT NULL DEFAULT 0,
   is_active     TINYINT(1) NOT NULL DEFAULT 1,
   fcm_token     VARCHAR(255)  NULL,           -- current device's push token, latest wins
+  -- Updated on every authenticated request from an admin (see
+  -- middleware/auth.js's requireAuth) — NOT touched for business users,
+  -- since it exists solely to enforce the admin portal's 15-minute hard
+  -- idle timeout in auth.service.js's refresh(). Left NULL for everyone
+  -- else, and treated as "not expired" when NULL so a brand-new admin
+  -- session is never rejected before its first tracked request.
+  last_active_at DATETIME     NULL,
   created_at    DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at    DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
 
