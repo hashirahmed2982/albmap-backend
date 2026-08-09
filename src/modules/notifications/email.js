@@ -165,7 +165,15 @@ async function sendBusinessRejectedEmail(user, business, reason) {
   });
 }
 
-async function sendBusinessDeactivatedEmail(user, business) {
+/**
+ * `reason` is mandatory at the call site (admin.service.js's
+ * deactivateBusiness rejects a deactivation with no reason before this
+ * is ever reached), unlike sendBusinessRejectedEmail's optional one —
+ * kept as a plain string param rather than defaulting/guarding here so
+ * a future caller can't silently regress back to sending a reason-less
+ * deactivation email.
+ */
+async function sendBusinessDeactivatedEmail(user, business, reason) {
   return sendEmail({
     to: user.email,
     subject: `"${business.name}" has been deactivated`,
@@ -173,11 +181,15 @@ async function sendBusinessDeactivatedEmail(user, business) {
       <h1 style="font-size: 20px; color: #1A1D1C;">Your listing was deactivated</h1>
       <p style="color: #52514D; line-height: 1.6;">
         "<strong>${business.name}</strong>" has been deactivated by an AlbMap admin and is no
-        longer visible on the map or in search. Your listing itself hasn't been deleted — contact
-        AlbMap support if you believe this was a mistake.
+        longer visible on the map or in search.
+        <br /><br /><strong>Reason:</strong> ${reason}
+      </p>
+      <p style="color: #52514D; line-height: 1.6;">
+        Your listing itself hasn't been deleted — contact AlbMap support if you believe this was
+        a mistake.
       </p>
     `),
-    text: `"${business.name}" has been deactivated by an admin and is no longer publicly visible.`,
+    text: `"${business.name}" has been deactivated by an admin and is no longer publicly visible. Reason: ${reason}`,
   });
 }
 
@@ -192,6 +204,47 @@ async function sendBusinessReactivatedEmail(user, business) {
       </p>
     `),
     text: `"${business.name}" has been reactivated and is visible on AlbMap again.`,
+  });
+}
+
+/**
+ * A banned user has no dashboard/account page left to explain this on —
+ * this email and the same-worded message on their next login attempt
+ * (see auth.service.js's deactivatedAccountMessage) are the only two
+ * places they'll ever see why. `reason` is mandatory at the call site
+ * (admin.service.js's setUserActive), same reasoning as
+ * sendBusinessDeactivatedEmail above.
+ */
+async function sendUserBannedEmail(user, reason) {
+  return sendEmail({
+    to: user.email,
+    subject: 'Your AlbMap account has been deactivated',
+    html: emailWrapper(`
+      <h1 style="font-size: 20px; color: #1A1D1C;">Your account was deactivated</h1>
+      <p style="color: #52514D; line-height: 1.6;">
+        An AlbMap admin has deactivated your account. You will not be able to log in until it's
+        reactivated.
+        <br /><br /><strong>Reason:</strong> ${reason}
+      </p>
+      <p style="color: #52514D; line-height: 1.6;">
+        Contact AlbMap support if you believe this was a mistake.
+      </p>
+    `),
+    text: `Your AlbMap account has been deactivated. Reason: ${reason}`,
+  });
+}
+
+async function sendUserReactivatedEmail(user) {
+  return sendEmail({
+    to: user.email,
+    subject: 'Your AlbMap account has been reactivated',
+    html: emailWrapper(`
+      <h1 style="font-size: 20px; color: #1A1D1C;">Your account was reactivated</h1>
+      <p style="color: #52514D; line-height: 1.6;">
+        An AlbMap admin has reactivated your account — you can log in again.
+      </p>
+    `),
+    text: `Your AlbMap account has been reactivated. You can log in again.`,
   });
 }
 
@@ -270,6 +323,8 @@ module.exports = {
   sendBusinessRejectedEmail,
   sendBusinessDeactivatedEmail,
   sendBusinessReactivatedEmail,
+  sendUserBannedEmail,
+  sendUserReactivatedEmail,
   sendAdminNewBusinessNotification,
   sendPasswordResetEmail,
   sendContactFormEmail,

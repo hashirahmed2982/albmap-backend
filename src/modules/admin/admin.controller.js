@@ -29,7 +29,12 @@ const reviewBusiness = asyncHandler(async (req, res) => {
 });
 
 const setBusinessActive = asyncHandler(async (req, res) => {
-  const business = await adminService.deactivateBusiness(req.params.id, req.body.isActive, req.user.id);
+  const business = await adminService.deactivateBusiness(
+    req.params.id,
+    req.body.isActive,
+    req.user.id,
+    req.body.reason,
+  );
   res.json(business);
 });
 
@@ -40,7 +45,7 @@ const getAllUsers = asyncHandler(async (req, res) => {
 });
 
 const setUserActive = asyncHandler(async (req, res) => {
-  await adminService.setUserActive(req.params.id, req.body.isActive);
+  await adminService.setUserActive(req.params.id, req.body.isActive, req.body.reason);
   res.status(204).send();
 });
 
