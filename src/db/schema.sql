@@ -27,6 +27,11 @@ CREATE TABLE IF NOT EXISTS users (
   provider_user_id VARCHAR(255) NULL,
   is_email_verified TINYINT(1) NOT NULL DEFAULT 0,
   is_active     TINYINT(1) NOT NULL DEFAULT 1,
+  -- Required whenever an admin sets is_active=0 (see admin.service.js's
+  -- setUserActive) — surfaced to the (now-banned) user on their next
+  -- login attempt, since a banned account has no other way to reach a
+  -- "why" — and in the ban email. Cleared back to NULL on reactivation.
+  deactivation_reason VARCHAR(500) NULL,
   fcm_token     VARCHAR(255)  NULL,           -- current device's push token, latest wins
   -- Updated on every authenticated request from an admin (see
   -- middleware/auth.js's requireAuth) — NOT touched for business users,
@@ -133,6 +138,11 @@ CREATE TABLE IF NOT EXISTS businesses (
   rating_avg    DECIMAL(2, 1) NOT NULL DEFAULT 0.0,
   rating_count  INT           NOT NULL DEFAULT 0,
   is_active     TINYINT(1)    NOT NULL DEFAULT 1,   -- admin can deactivate without deleting
+  -- Required whenever an admin sets is_active=0 (see admin.service.js's
+  -- deactivateBusiness) — mirrors rejection_reason: shown to the owner on
+  -- their dashboard and in the deactivation email, cleared back to NULL
+  -- on reactivation so it doesn't linger as a stale explanation.
+  deactivation_reason VARCHAR(500) NULL,
   reviewed_by   VARCHAR(36)   NULL,
   reviewed_at   DATETIME      NULL,
   created_at    DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,

@@ -16,14 +16,52 @@ router.get('/businesses/pending', controller.getPendingBusinesses);
 router.get('/businesses', controller.getAllBusinesses);
 router.patch(
   '/businesses/:id/review',
-  [body('decision').isIn(['approved', 'rejected']).withMessage('decision must be approved or rejected')],
+  [
+    body('decision').isIn(['approved', 'rejected']).withMessage('decision must be approved or rejected'),
+    // Only conditionally required (rejected, not approved) — express-
+    // validator's declarative .if() is finicky against a sibling field's
+    // exact value, so this checks it directly. admin.service.js's
+    // reviewBusiness() enforces the same rule again regardless — this is
+    // just what turns it into a clean 400 with a field-specific message
+    // instead of a generic one.
+    body('reason').custom((value, { req }) => {
+      if (req.body.decision === 'rejected' && !value?.trim()) {
+        throw new Error('A rejection reason is required');
+      }
+      return true;
+    }),
+  ],
   validate,
   controller.reviewBusiness,
 );
-router.patch('/businesses/:id/active', controller.setBusinessActive);
+router.patch(
+  '/businesses/:id/active',
+  [
+    body('reason').custom((value, { req }) => {
+      if (req.body.isActive === false && !value?.trim()) {
+        throw new Error('A deactivation reason is required');
+      }
+      return true;
+    }),
+  ],
+  validate,
+  controller.setBusinessActive,
+);
 
 router.get('/users', controller.getAllUsers);
-router.patch('/users/:id/active', controller.setUserActive);
+router.patch(
+  '/users/:id/active',
+  [
+    body('reason').custom((value, { req }) => {
+      if (req.body.isActive === false && !value?.trim()) {
+        throw new Error('A deactivation reason is required');
+      }
+      return true;
+    }),
+  ],
+  validate,
+  controller.setUserActive,
+);
 
 router.get('/events', controller.getAllEvents);
 router.patch('/events/:id/active', controller.setEventActive);

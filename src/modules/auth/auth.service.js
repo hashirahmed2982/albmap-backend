@@ -24,6 +24,19 @@ const SIGNUP_OTP_EXPIRY_MINUTES = 10;
 const SIGNUP_OTP_MAX_ATTEMPTS = 5;
 const SIGNUP_OTP_RESEND_COOLDOWN_SECONDS = 60;
 
+/**
+ * Every login path (password, Google, Facebook) checks is_active and
+ * needs the exact same message — a banned user has no dashboard/account
+ * page to see why on, so this login-attempt error is the only "website"
+ * surface they'll ever see it on, alongside the ban email
+ * (sendUserBannedEmail).
+ */
+function deactivatedAccountMessage(user) {
+  return user.deactivation_reason
+    ? `This account has been deactivated. Reason: ${user.deactivation_reason}`
+    : 'This account has been deactivated.';
+}
+
 function toPublicUser(row) {
   return {
     id: row.id,
@@ -164,7 +177,7 @@ async function login({ email, password }) {
     throw ApiError.unauthorized('Invalid email or password');
   }
   if (!user.is_active) {
-    throw ApiError.forbidden('This account has been deactivated');
+    throw ApiError.forbidden(deactivatedAccountMessage(user));
   }
 
   const passwordMatches = await bcrypt.compare(password, user.password_hash);
@@ -258,7 +271,7 @@ async function loginWithGoogle({ idToken }) {
     profileImageUrl: payload.picture,
   });
 
-  if (!user.is_active) throw ApiError.forbidden('This account has been deactivated');
+  if (!user.is_active) throw ApiError.forbidden(deactivatedAccountMessage(user));
 
   const tokens = await issueTokenPair(user.id);
   return { user: toPublicUser(user), ...tokens };
@@ -328,7 +341,7 @@ async function loginWithFacebook({ accessToken }) {
     profileImageUrl: profile.picture?.data?.url,
   });
 
-  if (!user.is_active) throw ApiError.forbidden('This account has been deactivated');
+  if (!user.is_active) throw ApiError.forbidden(deactivatedAccountMessage(user));
 
   const tokens = await issueTokenPair(user.id);
   return { user: toPublicUser(user), ...tokens };

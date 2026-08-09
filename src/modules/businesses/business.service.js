@@ -52,7 +52,15 @@ function toPublicBusiness(row) {
  * carries real information for the owner's own dashboard.
  */
 function toOwnerBusiness(row) {
-  return { ...toPublicBusiness(row), isActive: !!row.is_active };
+  return {
+    ...toPublicBusiness(row),
+    isActive: !!row.is_active,
+    // Neither is public — a business's own rejection/deactivation reason
+    // isn't something a random visitor needs, but the owner needs both
+    // to actually understand what happened and how to fix it.
+    rejectionReason: row.rejection_reason || null,
+    deactivationReason: row.deactivation_reason || null,
+  };
 }
 
 // Fields that materially change what a business claims to be — editing any
@@ -405,6 +413,7 @@ function toAdminBusiness(row) {
     ...toPublicBusiness(row),
     isActive: !!row.is_active,
     rejectionReason: row.rejection_reason,
+    deactivationReason: row.deactivation_reason || null,
     ownerName: row.owner_name || null,
     ownerEmail: row.owner_email || null,
     ownerPhone: row.owner_phone || null,

@@ -170,6 +170,14 @@ async function reviewBusiness(businessId, adminId, decision, reason) {
   if (!['approved', 'rejected'].includes(decision)) {
     throw ApiError.badRequest('decision must be "approved" or "rejected"');
   }
+  // A rejection with no explanation leaves the owner with nothing
+  // actionable to fix — the route-level validator (admin.routes.js)
+  // already enforces this from the request body, but this is the real
+  // authority: never trust that every caller of this function went
+  // through that route.
+  if (decision === 'rejected' && !reason?.trim()) {
+    throw ApiError.badRequest('A rejection reason is required');
+  }
 
   const [rows] = await pool.query('SELECT * FROM businesses WHERE id = ?', [businessId]);
   const business = rows[0];
@@ -178,20 +186,22 @@ async function reviewBusiness(businessId, adminId, decision, reason) {
     throw ApiError.conflict(`Business is already ${business.status}, not pending`);
   }
 
+  const trimmedReason = decision === 'rejected' ? reason.trim() : null;
+
   await pool.query(
     `UPDATE businesses
      SET status = ?, rejection_reason = ?, reviewed_by = ?, reviewed_at = NOW()
      WHERE id = ?`,
-    [decision, decision === 'rejected' ? reason || null : null, adminId, businessId],
+    [decision, trimmedReason, adminId, businessId],
   );
 
   await pool.query(
     `INSERT INTO business_status_history (id, business_id, old_status, new_status, reason, changed_by)
      VALUES (?, ?, 'pending', ?, ?, ?)`,
-    [uuidv4(), businessId, decision, reason || null, adminId],
+    [uuidv4(), businessId, decision, trimmedReason, adminId],
   );
 
-  await notificationService.notifyBusinessStatusChange(businessId, business.owner_id, decision, reason);
+  await notificationService.notifyBusinessStatusChange(businessId, business.owner_id, decision, trimmedReason);
 
   const updated = await businessService.getBusinessById(businessId);
 
@@ -205,14 +215,22 @@ async function reviewBusiness(businessId, adminId, decision, reason) {
     if (decision === 'approved') {
       emailService.sendBusinessApprovedEmail(owner, updated);
     } else {
-      emailService.sendBusinessRejectedEmail(owner, updated, reason);
+      emailService.sendBusinessRejectedEmail(owner, updated, trimmedReason);
     }
   }
 
   return updated;
 }
 
-async function deactivateBusiness(businessId, isActive, adminId) {
+async function deactivateBusiness(businessId, isActive, adminId, reason) {
+  // Deactivating (not reactivating) requires an explanation — the same
+  // reasoning as a rejection: the owner needs something actionable, not
+  // just "your listing disappeared." Reactivating needs no reason; it's
+  // undoing a problem, not creating one to explain.
+  if (!isActive && !reason?.trim()) {
+    throw ApiError.badRequest('A deactivation reason is required');
+  }
+
   const [existingRows] = await pool.query('SELECT * FROM businesses WHERE id = ?', [businessId]);
   const existing = existingRows[0];
   if (!existing) throw ApiError.notFound('Business not found');
@@ -225,7 +243,13 @@ async function deactivateBusiness(businessId, isActive, adminId) {
     return businessService.getBusinessById(businessId);
   }
 
-  await pool.query('UPDATE businesses SET is_active = ? WHERE id = ?', [isActive ? 1 : 0, businessId]);
+  const trimmedReason = isActive ? null : reason.trim();
+
+  await pool.query('UPDATE businesses SET is_active = ?, deactivation_reason = ? WHERE id = ?', [
+    isActive ? 1 : 0,
+    trimmedReason,
+    businessId,
+  ]);
 
   await pool.query(
     `INSERT INTO business_status_history (id, business_id, old_status, new_status, reason, changed_by)
@@ -235,7 +259,7 @@ async function deactivateBusiness(businessId, isActive, adminId) {
       businessId,
       existing.status,
       existing.status,
-      isActive ? 'Reactivated by admin' : 'Deactivated by admin',
+      isActive ? 'Reactivated by admin' : trimmedReason,
       adminId || null,
     ],
   );
@@ -248,7 +272,7 @@ async function deactivateBusiness(businessId, isActive, adminId) {
     if (isActive) {
       emailService.sendBusinessReactivatedEmail(owner, updated);
     } else {
-      emailService.sendBusinessDeactivatedEmail(owner, updated);
+      emailService.sendBusinessDeactivatedEmail(owner, updated, trimmedReason);
     }
   }
 
@@ -262,7 +286,7 @@ const USER_SORT_COLUMNS = { name: 'name', createdAt: 'created_at' };
 async function getAllUsers({ search, dateFrom, dateTo, page, limit, sortBy, sortOrder } = {}) {
   const { pageNum, pageLimit, offset } = pageParams(page, limit);
 
-  let sql = `SELECT SQL_CALC_FOUND_ROWS id, email, name, phone, role, is_active, created_at FROM users WHERE role = 'business'`;
+  let sql = `SELECT SQL_CALC_FOUND_ROWS id, email, name, phone, role, is_active, deactivation_reason, created_at FROM users WHERE role = 'business'`;
   const params = [];
   if (search) {
     sql += ' AND (name LIKE ? OR email LIKE ?)';
@@ -293,18 +317,43 @@ async function getAllUsers({ search, dateFrom, dateTo, page, limit, sortBy, sort
       phone: u.phone,
       role: u.role,
       isActive: !!u.is_active,
+      deactivationReason: u.deactivation_reason || null,
       createdAt: u.created_at,
     })),
     pagination: paginationMeta(pageNum, pageLimit, total),
   };
 }
 
-async function setUserActive(userId, isActive) {
-  const [result] = await pool.query('UPDATE users SET is_active = ? WHERE id = ?', [
+async function setUserActive(userId, isActive, reason) {
+  // Same reasoning as deactivateBusiness: banning needs a reason a
+  // banned user can actually be told (see auth.service.js's login(),
+  // which now surfaces it); reactivating doesn't.
+  if (!isActive && !reason?.trim()) {
+    throw ApiError.badRequest('A deactivation reason is required');
+  }
+
+  const [existingRows] = await pool.query('SELECT * FROM users WHERE id = ?', [userId]);
+  const existing = existingRows[0];
+  if (!existing) throw ApiError.notFound('User not found');
+
+  // No-op if already in the requested state — same "avoid a spurious
+  // duplicate email" reasoning as deactivateBusiness.
+  const wasActive = !!existing.is_active;
+  if (wasActive === isActive) return;
+
+  const trimmedReason = isActive ? null : reason.trim();
+
+  await pool.query('UPDATE users SET is_active = ?, deactivation_reason = ? WHERE id = ?', [
     isActive ? 1 : 0,
+    trimmedReason,
     userId,
   ]);
-  if (result.affectedRows === 0) throw ApiError.notFound('User not found');
+
+  if (isActive) {
+    emailService.sendUserReactivatedEmail(existing);
+  } else {
+    emailService.sendUserBannedEmail(existing, trimmedReason);
+  }
 }
 
 // ---------------- Event moderation ----------------
