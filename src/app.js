@@ -12,6 +12,24 @@ const ApiError = require('./utils/ApiError');
 
 const app = express();
 
+// Trusts exactly one hop of reverse proxy (nginx sitting in front of this
+// process on the same box — see the deploy setup). Without this, Express
+// ignores X-Forwarded-For entirely and req.ip resolves to the proxy's own
+// address for every request, which breaks express-rate-limit two ways at
+// once: every client gets lumped into one shared rate-limit bucket keyed
+// off the proxy's IP, AND express-rate-limit's own startup validation
+// throws ERR_ERL_UNEXPECTED_X_FORWARDED_FOR on every request because it
+// sees a forwarded-for header arrive despite trust proxy being unset —
+// which is exactly what showed up in production logs.
+//
+// Using the numeric hop count `1` rather than `true` is deliberate:
+// `true` trusts every hop in the chain, including ones a client could
+// forge if they can reach this process directly (bypassing nginx) or if
+// there's ever more than one proxy in front later — trusting only the
+// nearest hop means Express reads the *last* IP nginx itself appended to
+// X-Forwarded-For, not whatever a client claims further up the chain.
+app.set('trust proxy', 1);
+
 // ---------------- Security & parsing ----------------
 app.use(helmet());
 app.use(express.json({ limit: '2mb' }));
