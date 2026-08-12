@@ -186,6 +186,95 @@ async function createEvent(userId, data) {
 }
 
 /**
+ * The owner's own view of their events, across all of their businesses —
+ * mirrors business.service.js's getMyBusinesses: unlike the public feed
+ * (getEvents), this is never filtered by is_active or business status, so
+ * an owner can see everything they've ever created, including events an
+ * admin deactivated or ones tied to a since-deactivated business. Ordered
+ * newest-start-first (rather than getEvents' soonest-first) so the most
+ * recently created/relevant events surface at the top of a "My Events"
+ * list the same way "My Businesses" sorts by created_at DESC — a history
+ * view reads more naturally most-recent-first than earliest-first.
+ */
+async function getMyEvents(ownerId) {
+  const [rows] = await pool.query(
+    `SELECT e.*, b.name AS business_name,
+            (SELECT COUNT(*) FROM event_interests ei WHERE ei.event_id = e.id) AS interest_count,
+            EXISTS(
+              SELECT 1 FROM event_interests ei2 WHERE ei2.event_id = e.id AND ei2.user_id = ?
+            ) AS is_interested
+     FROM events e
+     JOIN businesses b ON b.id = e.business_id
+     WHERE b.owner_id = ?
+     ORDER BY e.start_time DESC`,
+    [ownerId, ownerId],
+  );
+  return rows.map((row) => ({ ...toPublicEvent(row), isActive: !!row.is_active }));
+}
+
+/**
+ * Owner-only edit of their own event's editable fields — id, business_id,
+ * and is_active are never touched here (business_id can't be reassigned
+ * to a different business after the fact; is_active is exclusively the
+ * admin moderation flow's to flip).
+ *
+ * Blocks editing once the event has finished (end_time in the past) —
+ * enforced here, not just in the app's UI, since the UI check alone is
+ * trivially bypassed by anyone calling this endpoint directly. An event
+ * that already happened is history at that point; nothing about editing
+ * its description or poster after the fact makes sense, and silently
+ * allowing it would let an owner rewrite what an event claimed to be
+ * after the fact with no trace that it ever said something else.
+ */
+async function updateEvent(eventId, ownerId, data) {
+  const [existingRows] = await pool.query(
+    `SELECT e.*, b.owner_id AS business_owner_id FROM events e
+     JOIN businesses b ON b.id = e.business_id
+     WHERE e.id = ?`,
+    [eventId],
+  );
+  const existing = existingRows[0];
+  if (!existing) throw ApiError.notFound('Event not found');
+  if (existing.business_owner_id !== ownerId) {
+    throw ApiError.forbidden('You do not own this event');
+  }
+  if (new Date(existing.end_time) < new Date()) {
+    throw ApiError.forbidden('This event has already finished and can no longer be edited');
+  }
+
+  const fieldMap = {
+    name: 'name',
+    description: 'description',
+    category: 'category',
+    imageUrl: 'image_url',
+  };
+  const updates = [];
+  const params = [];
+
+  for (const [camelCase, column] of Object.entries(fieldMap)) {
+    if (data[camelCase] !== undefined) {
+      updates.push(`${column} = ?`);
+      params.push(data[camelCase]);
+    }
+  }
+  if (data.startTime !== undefined) {
+    updates.push('start_time = ?');
+    params.push(toMysqlDatetime(data.startTime));
+  }
+  if (data.endTime !== undefined) {
+    updates.push('end_time = ?');
+    params.push(toMysqlDatetime(data.endTime));
+  }
+
+  if (updates.length === 0) return getEventById(eventId, ownerId);
+
+  params.push(eventId);
+  await pool.query(`UPDATE events SET ${updates.join(', ')} WHERE id = ?`, params);
+
+  return getEventById(eventId, ownerId);
+}
+
+/**
  * Everything toPublicEvent has, plus what an admin needs to moderate
  * effectively: whether it's currently active, when it was created, and
  * who owns the business behind it (name/email — an admin investigating a
@@ -206,7 +295,9 @@ function toAdminEvent(row) {
 module.exports = {
   getEvents,
   getEventById,
+  getMyEvents,
   createEvent,
+  updateEvent,
   addInterest,
   removeInterest,
   toPublicEvent,

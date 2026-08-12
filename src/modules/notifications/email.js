@@ -279,6 +279,49 @@ async function sendAdminNewBusinessNotification(business, owner) {
   });
 }
 
+/**
+ * The two emails below tell a business owner what happened to a
+ * broadcast/offer *they* submitted (see notification.service.js's
+ * submitBroadcast) once an admin reviews it — previously reviewBroadcast
+ * only ever recorded the decision and, on approval, pushed the broadcast
+ * out to every other user; the submitter themselves got no signal at all
+ * unless they happened to have the app open and reopened the admin
+ * review... which they can't, they're not an admin. Same "an in-app/push
+ * notice isn't enough on its own" reasoning as the business lifecycle
+ * emails above — an owner who isn't looking at the app right then would
+ * otherwise never find out.
+ */
+async function sendNotificationApprovedEmail(user, notification) {
+  return sendEmail({
+    to: user.email,
+    subject: `Your notification "${notification.title}" is live`,
+    html: emailWrapper(`
+      <h1 style="font-size: 20px; color: #1A1D1C;">Your notification was approved</h1>
+      <p style="color: #52514D; line-height: 1.6;">
+        "<strong>${notification.title}</strong>" has been approved by an AlbMap admin and has just
+        been sent out to everyone on AlbMap.
+      </p>
+    `),
+    text: `"${notification.title}" has been approved and sent out to everyone on AlbMap.`,
+  });
+}
+
+async function sendNotificationRejectedEmail(user, notification, reason) {
+  return sendEmail({
+    to: user.email,
+    subject: `Update on your notification "${notification.title}"`,
+    html: emailWrapper(`
+      <h1 style="font-size: 20px; color: #1A1D1C;">Your notification wasn't approved</h1>
+      <p style="color: #52514D; line-height: 1.6;">
+        "<strong>${notification.title}</strong>" was not approved by an AlbMap admin and was not
+        sent out.
+        ${reason ? `<br /><br /><strong>Reason:</strong> ${reason}` : ''}
+      </p>
+    `),
+    text: `"${notification.title}" was not approved and was not sent out.${reason ? ` Reason: ${reason}` : ''}`,
+  });
+}
+
 async function sendPasswordResetEmail(user, rawToken) {
   const resetLink = `${env.websiteUrl}/reset-password?token=${rawToken}`;
   return sendEmail({
@@ -325,6 +368,8 @@ module.exports = {
   sendBusinessReactivatedEmail,
   sendUserBannedEmail,
   sendUserReactivatedEmail,
+  sendNotificationApprovedEmail,
+  sendNotificationRejectedEmail,
   sendAdminNewBusinessNotification,
   sendPasswordResetEmail,
   sendContactFormEmail,
