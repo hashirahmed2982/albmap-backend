@@ -12,7 +12,9 @@ const router = express.Router();
 
 // optionalAuth (not requireAuth): browsing events never requires login,
 // but a logged-in caller gets `isInterested` computed for them on each
-// event — see event.service.js's getEvents/getEventById.
+// event — see event.service.js's getEvents/getEventById. The controller
+// only requires req.user when ?ownerId= is passed (the "my events" case),
+// same split as GET /businesses.
 router.get('/', optionalAuth, controller.getEvents);
 router.get('/:id', optionalAuth, controller.getEventById);
 
@@ -27,6 +29,17 @@ router.post(
   ],
   validate,
   controller.createEvent,
+);
+
+router.patch(
+  '/:id',
+  requireAuth,
+  [
+    body('startTime').optional().isISO8601().withMessage('Valid startTime is required'),
+    body('endTime').optional().isISO8601().withMessage('Valid endTime is required'),
+  ],
+  validate,
+  controller.updateEvent,
 );
 
 // "I'm interested" / RSVP toggle — see event.service.js's addInterest/

@@ -2,6 +2,7 @@ const { v4: uuidv4 } = require('uuid');
 const { pool } = require('../../config/db');
 const ApiError = require('../../utils/ApiError');
 const { sendToTopic, ALL_USERS_TOPIC } = require('./fcm');
+const emailService = require('./email');
 
 function toPublicNotification(row) {
   return {
@@ -166,6 +167,25 @@ async function reviewBroadcast(notificationId, adminId, decision, reason) {
       body: notification.body,
       data: { type: 'business_offer', businessId: notification.business_id, notificationId },
     });
+  }
+
+  // Fire-and-forget — same reasoning as everywhere else email gets sent
+  // from this codebase (see admin.service.js's reviewBusiness): a slow or
+  // failed send should never delay or break the actual review response,
+  // and sendEmail() already catches its own errors internally. The push
+  // above (or lack of one, on rejection) only ever reaches the *submitter*
+  // if their device happens to be registered and the app is running — an
+  // owner who submitted this from a device they're not currently using,
+  // or who primarily uses the website, would otherwise never learn what
+  // happened to their own submission.
+  const [senderRows] = await pool.query('SELECT name, email FROM users WHERE id = ?', [notification.sent_by]);
+  const sender = senderRows[0];
+  if (sender) {
+    if (decision === 'approved') {
+      emailService.sendNotificationApprovedEmail(sender, notification);
+    } else {
+      emailService.sendNotificationRejectedEmail(sender, notification, reason);
+    }
   }
 
   return { id: notificationId, status: decision, delivery };
