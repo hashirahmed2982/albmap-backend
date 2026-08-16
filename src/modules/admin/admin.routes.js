@@ -31,6 +31,7 @@ const csvUpload = multer({
 router.get('/dashboard', controller.getDashboardStats);
 
 router.get('/businesses/pending', controller.getPendingBusinesses);
+router.get('/businesses/export.csv', controller.exportBusinessesCsv);
 router.get('/businesses', controller.getAllBusinesses);
 router.patch(
   '/businesses/:id/review',

@@ -376,6 +376,45 @@ async function exportUsersToCsv() {
   return stringify(records, { header: true });
 }
 
+/**
+ * Every business, unpaginated and unfiltered, across every status — same
+ * "complete snapshot, not whatever the table's current filters are"
+ * reasoning as exportUsersToCsv. Includes the owner's name/email so the
+ * export is actually useful on its own without needing to cross-reference
+ * the Users export separately.
+ */
+async function exportBusinessesToCsv() {
+  const [rows] = await pool.query(
+    `SELECT b.*, owner.name AS owner_name, owner.email AS owner_email
+     FROM businesses b
+     JOIN users owner ON owner.id = b.owner_id
+     ORDER BY b.created_at DESC`,
+  );
+
+  const records = rows.map((b) => ({
+    ID: b.id,
+    Name: b.name,
+    Category: b.category,
+    'Street Address': b.street_address,
+    'Postal Code': b.postal_code,
+    City: b.city,
+    Country: b.country,
+    Latitude: b.latitude,
+    Longitude: b.longitude,
+    Phone: b.phone || '',
+    Website: b.website || '',
+    Status: b.status,
+    Active: b.is_active ? 'yes' : 'no',
+    'Owner Name': b.owner_name,
+    'Owner Email': b.owner_email,
+    Rating: b.rating_count > 0 ? b.rating_avg : '',
+    'Rating Count': b.rating_count,
+    Created: new Date(b.created_at).toISOString(),
+  }));
+
+  return stringify(records, { header: true });
+}
+
 async function setUserActive(userId, isActive, reason) {
   // Same reasoning as deactivateBusiness: banning needs a reason a
   // banned user can actually be told (see auth.service.js's login(),
@@ -532,6 +571,7 @@ module.exports = {
   getAllBusinesses,
   reviewBusiness,
   deactivateBusiness,
+  exportBusinessesToCsv,
   getAllUsers,
   exportUsersToCsv,
   setUserActive,

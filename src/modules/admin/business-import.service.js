@@ -120,6 +120,31 @@ async function sendOwnerInvite(user, business) {
 }
 
 /**
+ * A row counts as "the same business" as one already imported if the
+ * same email already owns a business with the same name at the same
+ * street address — deliberately not just name-matching (a chain with
+ * several branches sharing a name isn't a duplicate of itself) and not
+ * just email-matching (one owner can have several real businesses).
+ * Checked before geocoding, not after — no point spending a rate-limited
+ * Nominatim request (see utils/geocode.js) resolving coordinates for a
+ * row that's just going to be skipped anyway.
+ *
+ * This is what makes re-running the exact same CSV any number of times a
+ * safe no-op for rows already imported — the admin doesn't need to hand-
+ * edit the file down to just the new/fixed rows before re-uploading it.
+ */
+async function findDuplicateBusiness(email, name, streetAddress) {
+  const [rows] = await pool.query(
+    `SELECT b.id FROM businesses b
+     JOIN users u ON u.id = b.owner_id
+     WHERE u.email = ? AND b.name = ? AND b.street_address = ?
+     LIMIT 1`,
+    [email, name, streetAddress],
+  );
+  return rows[0] || null;
+}
+
+/**
  * Imports one already-normalized row. Always lands as 'pending' —
  * regardless of whatever Status/Verifiziert the CSV itself claims — since
  * those describe the *old* platform's own decision, not a review this
@@ -131,6 +156,11 @@ async function sendOwnerInvite(user, business) {
 async function importRow(row, adminId) {
   if (!row.name || !row.streetAddress || !row.city || !row.postalCode || !row.email) {
     throw new Error('Missing required field (name, address, city, postal code, or email)');
+  }
+
+  const duplicate = await findDuplicateBusiness(row.email, row.name, row.streetAddress);
+  if (duplicate) {
+    return { duplicate: true };
   }
 
   const coords = await geocodeAddress({
@@ -181,7 +211,7 @@ async function importRow(row, adminId) {
     sendOwnerInvite(owner, created);
   }
 
-  return { business: created, ownerEmail: owner.email, ownerCreated: wasCreated };
+  return { duplicate: false, business: created, ownerEmail: owner.email, ownerCreated: wasCreated };
 }
 
 /**
@@ -205,15 +235,25 @@ async function importBusinessesFromCsv(buffer, adminId) {
     throw ApiError.badRequest('CSV file has no data rows');
   }
 
-  const results = { imported: 0, linkedToExistingUser: 0, invitedNewUser: 0, failed: [] };
+  const results = {
+    imported: 0,
+    linkedToExistingUser: 0,
+    invitedNewUser: 0,
+    duplicatesSkipped: [],
+    failed: [],
+  };
 
   for (let i = 0; i < records.length; i += 1) {
     const rowNumber = i + 2; // +1 for 0-index, +1 for the header row itself
     try {
       const normalized = normalizeRow(records[i]);
-      const { ownerCreated } = await importRow(normalized, adminId);
+      const result = await importRow(normalized, adminId);
+      if (result.duplicate) {
+        results.duplicatesSkipped.push({ row: rowNumber, name: records[i].Name || null });
+        continue;
+      }
       results.imported += 1;
-      if (ownerCreated) {
+      if (result.ownerCreated) {
         results.invitedNewUser += 1;
       } else {
         results.linkedToExistingUser += 1;
