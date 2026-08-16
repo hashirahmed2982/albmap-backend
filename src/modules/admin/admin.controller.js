@@ -39,6 +39,15 @@ const setBusinessActive = asyncHandler(async (req, res) => {
   res.json(business);
 });
 
+const exportBusinessesCsv = asyncHandler(async (req, res) => {
+  const csv = await adminService.exportBusinessesToCsv();
+  res.set({
+    'Content-Type': 'text/csv; charset=utf-8',
+    'Content-Disposition': `attachment; filename="albmap-businesses-${new Date().toISOString().slice(0, 10)}.csv"`,
+  });
+  res.send(csv);
+});
+
 const getAllUsers = asyncHandler(async (req, res) => {
   const { search, dateFrom, dateTo, page, limit, sortBy, sortOrder } = req.query;
   const result = await adminService.getAllUsers({ search, dateFrom, dateTo, page, limit, sortBy, sortOrder });
@@ -143,6 +152,7 @@ module.exports = {
   reviewBusiness,
   setBusinessActive,
   importBusinessesCsv,
+  exportBusinessesCsv,
   getAllUsers,
   exportUsersCsv,
   setUserActive,
