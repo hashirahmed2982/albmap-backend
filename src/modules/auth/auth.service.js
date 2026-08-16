@@ -440,6 +440,15 @@ async function forgotPassword({ email }) {
  * the old password (the whole point of "forgot" password) — the token
  * itself, which only reached the real account owner's inbox, is the
  * proof of identity here.
+ *
+ * Also doubles as the account-completion step for a CSV-imported,
+ * still-'invited' owner (see business-import.service.js and
+ * sendBusinessOwnerInviteEmail) — that flow issues the exact same kind of
+ * token via the exact same table, so this is the one place both "I
+ * forgot my password" and "I'm setting my password for the first time"
+ * ever land. Flipping account_status here (not somewhere invite-specific)
+ * is what actually unblocks admin.service.js's reviewBusiness() — an
+ * account that was never 'invited' just no-ops on this UPDATE.
  */
 async function resetPassword({ token, newPassword }) {
   if (!token) throw ApiError.badRequest('Missing reset token');
@@ -457,7 +466,12 @@ async function resetPassword({ token, newPassword }) {
   }
 
   const newHash = await bcrypt.hash(newPassword, 10);
-  await pool.query('UPDATE users SET password_hash = ? WHERE id = ?', [newHash, resetToken.user_id]);
+  await pool.query(
+    `UPDATE users
+     SET password_hash = ?, account_status = 'active', is_email_verified = 1
+     WHERE id = ?`,
+    [newHash, resetToken.user_id],
+  );
   await pool.query('UPDATE password_reset_tokens SET used_at = NOW() WHERE id = ?', [resetToken.id]);
 
   // Same reasoning as changePassword: a password reset should invalidate

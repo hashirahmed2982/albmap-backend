@@ -1,7 +1,9 @@
 const express = require('express');
+const multer = require('multer');
 const { body } = require('express-validator');
 const validate = require('../../middleware/validate');
 const { requireAuth, requireRole } = require('../../middleware/auth');
+const ApiError = require('../../utils/ApiError');
 const controller = require('./admin.controller');
 
 const router = express.Router();
@@ -9,6 +11,22 @@ const router = express.Router();
 // Every route in this file requires an authenticated admin — enforced once
 // here rather than repeated on each route.
 router.use(requireAuth, requireRole('admin'));
+
+// Memory storage (not the shared disk-based `upload` middleware in
+// middleware/upload.js, which is image-only and writes straight to
+// env.uploads.dir) — a CSV import is parsed once into rows and never
+// needs to persist as a file on disk, so buffering it in memory is
+// simpler and avoids leaving stray upload artifacts around. 10MB is
+// generous for a business-listing CSV.
+const csvUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    const isCsv = file.mimetype === 'text/csv' || file.originalname.toLowerCase().endsWith('.csv');
+    if (!isCsv) return cb(ApiError.badRequest('Only .csv files are allowed'));
+    cb(null, true);
+  },
+});
 
 router.get('/dashboard', controller.getDashboardStats);
 
@@ -47,8 +65,10 @@ router.patch(
   validate,
   controller.setBusinessActive,
 );
+router.post('/businesses/import', csvUpload.single('file'), controller.importBusinessesCsv);
 
 router.get('/users', controller.getAllUsers);
+router.get('/users/export.csv', controller.exportUsersCsv);
 router.patch(
   '/users/:id/active',
   [
