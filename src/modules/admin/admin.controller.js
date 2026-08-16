@@ -1,4 +1,5 @@
 const asyncHandler = require('../../utils/asyncHandler');
+const ApiError = require('../../utils/ApiError');
 const adminService = require('./admin.service');
 
 const getDashboardStats = asyncHandler(async (req, res) => {
@@ -41,6 +42,21 @@ const setBusinessActive = asyncHandler(async (req, res) => {
 const getAllUsers = asyncHandler(async (req, res) => {
   const { search, dateFrom, dateTo, page, limit, sortBy, sortOrder } = req.query;
   const result = await adminService.getAllUsers({ search, dateFrom, dateTo, page, limit, sortBy, sortOrder });
+  res.json(result);
+});
+
+const exportUsersCsv = asyncHandler(async (req, res) => {
+  const csv = await adminService.exportUsersToCsv();
+  res.set({
+    'Content-Type': 'text/csv; charset=utf-8',
+    'Content-Disposition': `attachment; filename="albmap-users-${new Date().toISOString().slice(0, 10)}.csv"`,
+  });
+  res.send(csv);
+});
+
+const importBusinessesCsv = asyncHandler(async (req, res) => {
+  if (!req.file) throw ApiError.badRequest('No CSV file uploaded');
+  const result = await adminService.importBusinessesFromCsv(req.file.buffer, req.user.id);
   res.json(result);
 });
 
@@ -126,7 +142,9 @@ module.exports = {
   getAllBusinesses,
   reviewBusiness,
   setBusinessActive,
+  importBusinessesCsv,
   getAllUsers,
+  exportUsersCsv,
   setUserActive,
   getAllEvents,
   setEventActive,

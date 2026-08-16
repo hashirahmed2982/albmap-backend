@@ -27,6 +27,18 @@ CREATE TABLE IF NOT EXISTS users (
   provider_user_id VARCHAR(255) NULL,
   is_email_verified TINYINT(1) NOT NULL DEFAULT 0,
   is_active     TINYINT(1) NOT NULL DEFAULT 1,
+  -- 'invited' means an admin's CSV business import created this account
+  -- on the owner's behalf (see business-import.service.js) and they
+  -- haven't finished setting it up yet — no usable password_hash exists
+  -- until they follow their invite email's link (which reuses the
+  -- forgot-password flow, see auth.service.js's resetPassword). Gates
+  -- admin.service.js's reviewBusiness(): a business can't be approved
+  -- while its owner is still 'invited', since nobody has actually
+  -- confirmed control of that email address yet. Every account created
+  -- through the normal signup/social-login flows is 'active' from the
+  -- moment it exists — this only ever starts as 'invited' for the
+  -- CSV-import case.
+  account_status ENUM('active', 'invited') NOT NULL DEFAULT 'active',
   -- Required whenever an admin sets is_active=0 (see admin.service.js's
   -- setUserActive) — surfaced to the (now-banned) user on their next
   -- login attempt, since a banned account has no other way to reach a
@@ -130,6 +142,7 @@ CREATE TABLE IF NOT EXISTS businesses (
   longitude     DECIMAL(10, 7) NOT NULL,
   phone         VARCHAR(30)   NULL,
   whatsapp_number VARCHAR(30) NULL,   -- distinct from `phone` — a business may take calls on one line and WhatsApp on another
+  website       VARCHAR(500)  NULL,   -- only ever populated via admin CSV import today (business-import.service.js) — not yet a field on the normal submit/edit forms
   logo_url      VARCHAR(500)  NULL,
   opening_hours JSON          NULL,   -- {"Mon-Fri": "09:00-18:00", ...}
   tags          JSON          NULL,   -- ["coffee", "wifi"]
@@ -423,5 +436,25 @@ CREATE TABLE IF NOT EXISTS site_content (
 
   FOREIGN KEY (updated_by) REFERENCES users(id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ---------------------------------------------------------------------------
+-- Idempotent column additions for databases that already existed before
+-- this column was added to the CREATE TABLE statements above.
+--
+-- IMPORTANT — this whole file is re-run verbatim by `npm run db:migrate`
+-- (see migrate.js's own comment: no real migration-versioning tool yet).
+-- `CREATE TABLE IF NOT EXISTS` only helps a *new* database — on a
+-- database that already has a `users`/`businesses` table from before a
+-- column existed, re-running the CREATE TABLE text above is a silent
+-- no-op for that table, so the column never actually gets added. Every
+-- column added to an existing table's definition needs a matching entry
+-- here too, or it only ever takes effect on a fresh install.
+--
+-- ADD COLUMN IF NOT EXISTS requires MySQL 8.0.29+. If your server
+-- predates that, run the ALTER TABLE manually once with IF NOT EXISTS
+-- removed (and skip it if the column's already there).
+-- ---------------------------------------------------------------------------
+ALTER TABLE users ADD COLUMN IF NOT EXISTS account_status ENUM('active', 'invited') NOT NULL DEFAULT 'active';
+ALTER TABLE businesses ADD COLUMN IF NOT EXISTS website VARCHAR(500) NULL;
 
 SET FOREIGN_KEY_CHECKS = 1;

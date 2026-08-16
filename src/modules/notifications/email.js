@@ -322,6 +322,43 @@ async function sendNotificationRejectedEmail(user, notification, reason) {
   });
 }
 
+/**
+ * Sent when an admin's CSV business import creates a brand-new account on
+ * an owner's behalf (see business-import.service.js) — this is their
+ * first-ever contact from AlbMap, so the copy explains why an account
+ * exists at all before asking them to set a password for it. Reuses the
+ * exact same link shape and consuming endpoint as sendPasswordResetEmail
+ * (POST /auth/reset-password with this token) — see auth.service.js's
+ * resetPassword(), which additionally flips a freshly-invited account
+ * from account_status='invited' to 'active' the moment this completes,
+ * which is what actually unblocks the linked business for admin approval.
+ */
+async function sendBusinessOwnerInviteEmail(user, business, rawToken) {
+  const setPasswordLink = `${env.websiteUrl}/reset-password?token=${rawToken}`;
+  return sendEmail({
+    to: user.email,
+    subject: `"${business.name}" is on AlbMap — set your password to manage it`,
+    html: emailWrapper(`
+      <h1 style="font-size: 20px; color: #1A1D1C;">Welcome to AlbMap</h1>
+      <p style="color: #52514D; line-height: 1.6;">
+        An AlbMap admin has added "<strong>${business.name}</strong>" to the platform and created
+        an account for you at this email address. Set a password to activate your account and
+        start managing your listing.
+      </p>
+      <p style="color: #52514D; line-height: 1.6;">
+        Your business won't be visible to the public until you've set your password and an
+        admin has reviewed and approved it.
+      </p>
+      <a href="${setPasswordLink}" style="display: inline-block; margin-top: 16px; padding: 12px 24px; background: #E31320; color: white; text-decoration: none; border-radius: 999px; font-weight: 600;">Set your password</a>
+      <p style="color: #8A8880; font-size: 13px; margin-top: 24px;">
+        This link expires in 1 hour. If you weren't expecting this, you can safely ignore it —
+        no account will be usable until this step is completed.
+      </p>
+    `),
+    text: `"${business.name}" has been added to AlbMap and an account was created for you at this email. Set your password to activate it: ${setPasswordLink} (expires in 1 hour)`,
+  });
+}
+
 async function sendPasswordResetEmail(user, rawToken) {
   const resetLink = `${env.websiteUrl}/reset-password?token=${rawToken}`;
   return sendEmail({
@@ -370,6 +407,7 @@ module.exports = {
   sendUserReactivatedEmail,
   sendNotificationApprovedEmail,
   sendNotificationRejectedEmail,
+  sendBusinessOwnerInviteEmail,
   sendAdminNewBusinessNotification,
   sendPasswordResetEmail,
   sendContactFormEmail,

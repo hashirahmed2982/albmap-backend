@@ -1,5 +1,6 @@
 const { v4: uuidv4 } = require('uuid');
 const bcrypt = require('bcryptjs');
+const { stringify } = require('csv-stringify/sync');
 const { pool } = require('../../config/db');
 const ApiError = require('../../utils/ApiError');
 const businessService = require('../businesses/business.service');
@@ -8,6 +9,7 @@ const categoryService = require('../categories/category.service');
 const notificationService = require('../notifications/notification.service');
 const contentService = require('../content/content.service');
 const emailService = require('../notifications/email');
+const businessImportService = require('./business-import.service');
 
 // ---------------- Dashboard ----------------
 
@@ -120,7 +122,7 @@ async function getAllBusinesses({ status, search, dateFrom, dateTo, page, limit,
 
   let sql = `
     SELECT SQL_CALC_FOUND_ROWS b.*, owner.name AS owner_name, owner.email AS owner_email, owner.phone AS owner_phone,
-           reviewer.name AS reviewer_name
+           owner.account_status AS owner_account_status, reviewer.name AS reviewer_name
     FROM businesses b
     JOIN users owner ON owner.id = b.owner_id
     LEFT JOIN users reviewer ON reviewer.id = b.reviewed_by
@@ -179,11 +181,29 @@ async function reviewBusiness(businessId, adminId, decision, reason) {
     throw ApiError.badRequest('A rejection reason is required');
   }
 
-  const [rows] = await pool.query('SELECT * FROM businesses WHERE id = ?', [businessId]);
+  const [rows] = await pool.query(
+    `SELECT b.*, owner.account_status AS owner_account_status, owner.email AS owner_email
+     FROM businesses b
+     JOIN users owner ON owner.id = b.owner_id
+     WHERE b.id = ?`,
+    [businessId],
+  );
   const business = rows[0];
   if (!business) throw ApiError.notFound('Business not found');
   if (business.status !== 'pending') {
     throw ApiError.conflict(`Business is already ${business.status}, not pending`);
+  }
+  // Blocks approval only — rejecting a business from an incomplete
+  // account is still fine (there's nothing to protect the owner from by
+  // waiting on that). This is what business-import.service.js's whole
+  // invite mechanism exists to enforce: a business linked to an account
+  // nobody has actually proven they control yet can't go live, no matter
+  // what an admin clicks.
+  if (decision === 'approved' && business.owner_account_status === 'invited') {
+    throw ApiError.forbidden(
+      `Cannot approve — the business owner hasn't activated their account yet. ` +
+        `An invitation was sent to ${business.owner_email}; they need to set a password before this can be approved.`,
+    );
   }
 
   const trimmedReason = decision === 'rejected' ? reason.trim() : null;
@@ -286,7 +306,7 @@ const USER_SORT_COLUMNS = { name: 'name', createdAt: 'created_at' };
 async function getAllUsers({ search, dateFrom, dateTo, page, limit, sortBy, sortOrder } = {}) {
   const { pageNum, pageLimit, offset } = pageParams(page, limit);
 
-  let sql = `SELECT SQL_CALC_FOUND_ROWS id, email, name, phone, role, is_active, deactivation_reason, created_at FROM users WHERE role = 'business'`;
+  let sql = `SELECT SQL_CALC_FOUND_ROWS id, email, name, phone, role, is_active, deactivation_reason, account_status, created_at FROM users WHERE role = 'business'`;
   const params = [];
   if (search) {
     sql += ' AND (name LIKE ? OR email LIKE ?)';
@@ -318,10 +338,42 @@ async function getAllUsers({ search, dateFrom, dateTo, page, limit, sortBy, sort
       role: u.role,
       isActive: !!u.is_active,
       deactivationReason: u.deactivation_reason || null,
+      accountStatus: u.account_status,
       createdAt: u.created_at,
     })),
     pagination: paginationMeta(pageNum, pageLimit, total),
   };
+}
+
+/**
+ * Every business user, unpaginated and unfiltered — a full export is
+ * meant to be a complete snapshot, not "whatever the admin's current
+ * table filters happened to be" (see importBusinessesFromCsv for the
+ * companion import direction). csv-stringify handles quoting fields that
+ * contain commas/quotes/newlines correctly, which a hand-rolled
+ * `.join(',')` would get wrong on a real name or note.
+ */
+async function exportUsersToCsv() {
+  const [rows] = await pool.query(
+    `SELECT id, email, name, phone, is_active, deactivation_reason, account_status, created_at
+     FROM users WHERE role = 'business' ORDER BY created_at DESC`,
+  );
+
+  const records = rows.map((u) => ({
+    ID: u.id,
+    Name: u.name,
+    Email: u.email,
+    Phone: u.phone || '',
+    Status: u.is_active ? 'active' : 'banned',
+    'Deactivation Reason': u.deactivation_reason || '',
+    // 'invited' means this account was created by a CSV business import
+    // and the owner hasn't set a password yet — see users.account_status
+    // in schema.sql.
+    'Account Status': u.account_status,
+    'Joined': new Date(u.created_at).toISOString(),
+  }));
+
+  return stringify(records, { header: true });
 }
 
 async function setUserActive(userId, isActive, reason) {
@@ -481,7 +533,11 @@ module.exports = {
   reviewBusiness,
   deactivateBusiness,
   getAllUsers,
+  exportUsersToCsv,
   setUserActive,
+  // Business CSV import — same thin-delegation pattern as categories/
+  // notifications/content above.
+  importBusinessesFromCsv: businessImportService.importBusinessesFromCsv,
   getAllEvents,
   setEventActive,
   getAllAdmins,

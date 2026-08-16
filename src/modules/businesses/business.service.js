@@ -32,6 +32,7 @@ function toPublicBusiness(row) {
     longitude: row.longitude !== null ? Number(row.longitude) : null,
     phone: row.phone,
     whatsappNumber: row.whatsapp_number,
+    website: row.website || null,
     logoUrl: row.logo_url,
     openingHours: row.opening_hours || {},
     tags: row.tags || [],
@@ -417,6 +418,12 @@ function toAdminBusiness(row) {
     ownerName: row.owner_name || null,
     ownerEmail: row.owner_email || null,
     ownerPhone: row.owner_phone || null,
+    // 'invited' means the owner account was created by a CSV import and
+    // hasn't been activated yet (see business-import.service.js) — the
+    // admin portal uses this to grey out Approve before even trying it,
+    // and admin.service.js's reviewBusiness() enforces the same rule
+    // server-side regardless of what the UI shows.
+    ownerAccountStatus: row.owner_account_status || 'active',
     reviewedBy: row.reviewed_by || null,
     reviewedByName: row.reviewer_name || null,
     reviewedAt: row.reviewed_at,
