@@ -438,23 +438,22 @@ CREATE TABLE IF NOT EXISTS site_content (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ---------------------------------------------------------------------------
--- Idempotent column additions for databases that already existed before
--- this column was added to the CREATE TABLE statements above.
+-- NOTE on adding columns to an already-deployed database: `CREATE TABLE IF
+-- NOT EXISTS` above only helps a *new* database — on a database that
+-- already has a `users`/`businesses` table from before a column existed,
+-- re-running the CREATE TABLE text is a silent no-op for that table, so a
+-- new column never actually gets added just by editing it above.
 --
--- IMPORTANT — this whole file is re-run verbatim by `npm run db:migrate`
--- (see migrate.js's own comment: no real migration-versioning tool yet).
--- `CREATE TABLE IF NOT EXISTS` only helps a *new* database — on a
--- database that already has a `users`/`businesses` table from before a
--- column existed, re-running the CREATE TABLE text above is a silent
--- no-op for that table, so the column never actually gets added. Every
--- column added to an existing table's definition needs a matching entry
--- here too, or it only ever takes effect on a fresh install.
---
--- ADD COLUMN IF NOT EXISTS requires MySQL 8.0.29+. If your server
--- predates that, run the ALTER TABLE manually once with IF NOT EXISTS
--- removed (and skip it if the column's already there).
+-- This used to be handled here with `ALTER TABLE ... ADD COLUMN IF NOT
+-- EXISTS ...` statements, but that syntax requires MySQL 8.0.29+ and broke
+-- migrate.js outright (ER_PARSE_ERROR) on older MySQL/MariaDB servers —
+-- and since this whole file runs as one multi-statement query, that one
+-- bad statement failed the ENTIRE migration, not just itself. Idempotent
+-- column additions now live in migrate.js instead (see its
+-- ensureColumn() helper), which checks information_schema.COLUMNS in JS
+-- and issues a plain `ALTER TABLE ... ADD COLUMN ...` — no IF NOT EXISTS,
+-- so it works on every MySQL/MariaDB version. Add new columns to the
+-- CREATE TABLE above AND to the ensureColumn() list in migrate.js.
 -- ---------------------------------------------------------------------------
-ALTER TABLE users ADD COLUMN IF NOT EXISTS account_status ENUM('active', 'invited') NOT NULL DEFAULT 'active';
-ALTER TABLE businesses ADD COLUMN IF NOT EXISTS website VARCHAR(500) NULL;
 
 SET FOREIGN_KEY_CHECKS = 1;
