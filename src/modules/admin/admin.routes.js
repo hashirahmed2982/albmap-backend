@@ -104,7 +104,14 @@ router.get('/categories', controller.getAllCategories);
 router.post(
   '/categories',
   [
-    body('name').trim().notEmpty().withMessage('Category name is required'),
+    // All three language versions are required on every category —
+    // category.service.js's requireAllLocales() is the actual source of
+    // truth (it also covers the cross-field "all or nothing" rule on
+    // PATCH below), these just give a field-specific message for the
+    // common case of a create request missing one outright.
+    body('name').trim().notEmpty().withMessage('English category name is required'),
+    body('nameDe').trim().notEmpty().withMessage('German category name is required'),
+    body('nameSq').trim().notEmpty().withMessage('Albanian category name is required'),
     body('sortOrder').optional().isInt().withMessage('sortOrder must be an integer'),
   ],
   validate,
@@ -113,7 +120,12 @@ router.post(
 router.patch(
   '/categories/:id',
   [
-    body('name').optional().trim().notEmpty().withMessage('Category name cannot be empty'),
+    // Optional here (a request that only changes sortOrder/iconName
+    // shouldn't have to resend all 3 names) — but if any one of the three
+    // is present, category.service.js requires all three together.
+    body('name').optional().trim().notEmpty().withMessage('English category name cannot be empty'),
+    body('nameDe').optional().trim().notEmpty().withMessage('German category name cannot be empty'),
+    body('nameSq').optional().trim().notEmpty().withMessage('Albanian category name cannot be empty'),
     body('sortOrder').optional().isInt().withMessage('sortOrder must be an integer'),
   ],
   validate,

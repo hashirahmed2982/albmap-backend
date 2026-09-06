@@ -107,14 +107,14 @@ const getAllCategories = asyncHandler(async (req, res) => {
 });
 
 const createCategory = asyncHandler(async (req, res) => {
-  const { name, iconName, sortOrder } = req.body;
-  const category = await adminService.createCategory({ name, iconName, sortOrder });
+  const { name, nameDe, nameSq, iconName, sortOrder } = req.body;
+  const category = await adminService.createCategory({ name, nameDe, nameSq, iconName, sortOrder });
   res.status(201).json(category);
 });
 
 const updateCategory = asyncHandler(async (req, res) => {
-  const { name, iconName, sortOrder } = req.body;
-  const category = await adminService.updateCategory(req.params.id, { name, iconName, sortOrder });
+  const { name, nameDe, nameSq, iconName, sortOrder } = req.body;
+  const category = await adminService.updateCategory(req.params.id, { name, nameDe, nameSq, iconName, sortOrder });
   res.json(category);
 });
 

@@ -6,6 +6,13 @@ const ApiError = require('../../utils/ApiError');
 // site_content's table comment in schema.sql).
 const ALLOWED_KEYS = ['about_us', 'social_links', 'privacy_policy', 'terms_conditions'];
 
+// These three are actual copy shown to end users, so they must be
+// entered in all of SUPPORTED_LOCALES — social_links is deliberately
+// not here: a Facebook/Instagram/etc. URL is the same regardless of
+// language, so it stays a single flat object instead of one per locale.
+const LOCALIZED_KEYS = ['about_us', 'privacy_policy', 'terms_conditions'];
+const SUPPORTED_LOCALES = ['en', 'de', 'sq'];
+
 const REQUIRED_STRING_FIELDS = {
   about_us: ['tagline', 'missionTitle', 'missionBody', 'visionTitle', 'visionBody'],
 };
@@ -46,21 +53,42 @@ function validateLegalPage(key, data) {
   });
 }
 
+/** Validates one locale's worth of a localized key's content — the exact
+ * same shape rules that applied to the whole (single-language) object
+ * before LOCALIZED_KEYS existed, just run once per required locale now. */
+function validateLocaleShape(key, localeData) {
+  if (key === 'privacy_policy' || key === 'terms_conditions') {
+    validateLegalPage(key, localeData);
+    return;
+  }
+  for (const field of REQUIRED_STRING_FIELDS[key] || []) {
+    if (typeof localeData[field] !== 'string' || !localeData[field].trim()) {
+      throw ApiError.badRequest(`${key}.${field} is required`);
+    }
+  }
+}
+
 function validateShape(key, data) {
   if (!data || typeof data !== 'object' || Array.isArray(data)) {
     throw ApiError.badRequest('Content data must be an object');
   }
 
-  if (key === 'privacy_policy' || key === 'terms_conditions') {
-    validateLegalPage(key, data);
+  if (LOCALIZED_KEYS.includes(key)) {
+    // An admin must provide every language together — a save missing
+    // even one locale is rejected outright rather than silently leaving
+    // that language showing stale or English content on the website/app.
+    for (const locale of SUPPORTED_LOCALES) {
+      const localeData = data[locale];
+      if (!localeData || typeof localeData !== 'object' || Array.isArray(localeData)) {
+        throw ApiError.badRequest(
+          `${key} is missing its "${locale}" version — all ${SUPPORTED_LOCALES.length} languages (${SUPPORTED_LOCALES.join(', ')}) are required`,
+        );
+      }
+      validateLocaleShape(key, localeData);
+    }
     return;
   }
 
-  for (const field of REQUIRED_STRING_FIELDS[key] || []) {
-    if (typeof data[field] !== 'string' || !data[field].trim()) {
-      throw ApiError.badRequest(`${key}.${field} is required`);
-    }
-  }
   for (const field of OPTIONAL_URL_FIELDS[key] || []) {
     if (data[field] != null && typeof data[field] !== 'string') {
       throw ApiError.badRequest(`${key}.${field} must be a string URL or null`);
@@ -70,6 +98,11 @@ function validateShape(key, data) {
 
 /**
  * Every page, keyed camelCase (aboutUs, socialLinks, ...) for both clients.
+ * For a LOCALIZED_KEYS page this is `{ en: {...}, de: {...}, sq: {...},
+ * updatedAt }` — each client (website, mobile app, admin portal) picks
+ * its own locale (or, for the admin portal's edit form, all three) out
+ * of that object; the backend does no locale resolution of its own.
+ * `social_links` stays flat (not locale-keyed) since it isn't translated.
  *
  * `row.data` is already a plain object here, not a JSON string — mysql2
  * auto-parses columns declared JSON (see site_content in schema.sql)
@@ -113,4 +146,4 @@ async function updateContent(key, data, adminId) {
   return { ...rows[0].data, updatedAt: rows[0].updated_at };
 }
 
-module.exports = { ALLOWED_KEYS, getAllContent, updateContent };
+module.exports = { ALLOWED_KEYS, LOCALIZED_KEYS, SUPPORTED_LOCALES, getAllContent, updateContent };

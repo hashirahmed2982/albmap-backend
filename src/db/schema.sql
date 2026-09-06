@@ -117,10 +117,20 @@ CREATE TABLE IF NOT EXISTS refresh_tokens (
 -- ---------------------------------------------------------------------------
 -- categories — business categories, seeded via seed.sql. Kept as a table
 -- (not a hardcoded enum) so an admin can add new ones without a migration.
+--
+-- `name` stays the single canonical value (English) — it's what
+-- businesses.category actually stores and matches against, unchanged.
+-- name_de/name_sq are display-only translations required alongside it
+-- (enforced in category.service.js, not here) so every category an admin
+-- adds or edits has all 3 language versions from day one, instead of
+-- silently falling back to English on the website/app for anything not
+-- already in a hardcoded translation list.
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS categories (
   id          INT          NOT NULL AUTO_INCREMENT PRIMARY KEY,
   name        VARCHAR(100) NOT NULL UNIQUE,
+  name_de     VARCHAR(100) NULL,
+  name_sq     VARCHAR(100) NULL,
   icon_name   VARCHAR(100) NULL,   -- maps to a Flutter IconData name client-side
   sort_order  INT          NOT NULL DEFAULT 0
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
