@@ -31,6 +31,16 @@ const COLUMNS_TO_ENSURE = [
     column: 'website',
     ddl: 'ALTER TABLE businesses ADD COLUMN website VARCHAR(500) NULL',
   },
+  {
+    table: 'categories',
+    column: 'name_de',
+    ddl: 'ALTER TABLE categories ADD COLUMN name_de VARCHAR(100) NULL',
+  },
+  {
+    table: 'categories',
+    column: 'name_sq',
+    ddl: 'ALTER TABLE categories ADD COLUMN name_sq VARCHAR(100) NULL',
+  },
 ];
 
 async function ensureColumn(connection, database, { table, column, ddl }) {
