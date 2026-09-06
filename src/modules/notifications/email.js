@@ -119,6 +119,20 @@ async function sendBusinessSubmittedEmail(user, business) {
 }
 
 /**
+ * /app/my-businesses is the website's smart-link page, not the dashboard
+ * directly — it tries to open this in the installed AlbMap app first
+ * (via the `albmap://open/my-businesses` custom scheme) and only falls
+ * back to showing the website dashboard / an app-install page with QR
+ * codes if nothing claims that scheme within a couple seconds. Plain
+ * `/dashboard` always opened the website even with the app installed,
+ * which is the actual bug this replaces (see albmap-website's
+ * src/app/app/my-businesses/page.tsx for the other half of this).
+ */
+function myBusinessesSmartLink() {
+  return `${env.websiteUrl}/app/my-businesses`;
+}
+
+/**
  * The four business-lifecycle emails below (approved/rejected/
  * deactivated/reactivated) are the actual notification an owner gets for
  * each admin decision — before this, admin.service.js only ever recorded
@@ -129,7 +143,7 @@ async function sendBusinessSubmittedEmail(user, business) {
  * sendEmail() already never throws.
  */
 async function sendBusinessApprovedEmail(user, business) {
-  const dashboardLink = `${env.websiteUrl}/dashboard`;
+  const dashboardLink = myBusinessesSmartLink();
   return sendEmail({
     to: user.email,
     subject: `"${business.name}" is now live on AlbMap! 🎉`,

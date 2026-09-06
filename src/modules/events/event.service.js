@@ -48,6 +48,17 @@ async function getEvents({ category, businessId, from, to, page, limit, userId }
   // caller — this route uses optionalAuth, not requireAuth) never
   // matches in SQL, so isInterested correctly comes back false without
   // needing a separate branch for the unauthenticated case.
+  //
+  // `e.end_time >= NOW()` is unconditional — this is the public browse
+  // feed (every caller, logged in or not, gets the same rows), so an
+  // event that's already finished never appears here regardless of any
+  // `from`/`to` range requested. Both the mobile app and website used to
+  // only enforce this client-side (filtering an already-fetched list),
+  // which meant a direct API call — or any future client — still saw
+  // every past event ever created. The one place a finished event should
+  // still be visible, as read-only history, is the creator's own "My
+  // Events" (see getMyEvents below, which deliberately has no such
+  // filter).
   let sql = `
     SELECT SQL_CALC_FOUND_ROWS e.*, b.name AS business_name,
            (SELECT COUNT(*) FROM event_interests ei WHERE ei.event_id = e.id) AS interest_count,
@@ -56,7 +67,7 @@ async function getEvents({ category, businessId, from, to, page, limit, userId }
            ) AS is_interested
     FROM events e
     JOIN businesses b ON b.id = e.business_id
-    WHERE e.is_active = 1 AND b.status = 'approved'
+    WHERE e.is_active = 1 AND b.status = 'approved' AND e.end_time >= NOW()
   `;
   const params = [userId || null];
 
@@ -89,9 +100,16 @@ async function getEvents({ category, businessId, from, to, page, limit, userId }
   };
 }
 
+/**
+ * Mirrors getEvents' public-feed exclusion for the single-event lookup:
+ * a finished event 404s here too unless the caller is the business owner
+ * who created it — a straight "not found" (not e.g. 403) so a finished
+ * event's continued existence isn't distinguishable from it never having
+ * existed, matching it having already been excluded from the public feed.
+ */
 async function getEventById(id, userId) {
   const [rows] = await pool.query(
-    `SELECT e.*, b.name AS business_name,
+    `SELECT e.*, b.name AS business_name, b.owner_id AS business_owner_id,
             (SELECT COUNT(*) FROM event_interests ei WHERE ei.event_id = e.id) AS interest_count,
             EXISTS(
               SELECT 1 FROM event_interests ei2 WHERE ei2.event_id = e.id AND ei2.user_id = ?
@@ -101,8 +119,15 @@ async function getEventById(id, userId) {
      WHERE e.id = ? LIMIT 1`,
     [userId || null, id],
   );
-  if (rows.length === 0) throw ApiError.notFound('Event not found');
-  return toPublicEvent(rows[0]);
+  const row = rows[0];
+  if (!row) throw ApiError.notFound('Event not found');
+
+  const isOwner = !!userId && row.business_owner_id === userId;
+  if (!isOwner && new Date(row.end_time) < new Date()) {
+    throw ApiError.notFound('Event not found');
+  }
+
+  return toPublicEvent(row);
 }
 
 /**
@@ -182,7 +207,11 @@ async function createEvent(userId, data) {
     ],
   );
 
-  return getEventById(id);
+  // Passes userId (the owner) through so getEventById's expired-event
+  // guard never fires on the event you just created — only matters if a
+  // business somehow submits an endTime already in the past, but there's
+  // no reason a creator shouldn't immediately see their own new event.
+  return getEventById(id, userId);
 }
 
 /**
