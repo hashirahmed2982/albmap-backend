@@ -201,6 +201,14 @@ async function reviewBroadcast(notificationId, adminId, decision, reason) {
  * rejected broadcasts never appear here — only approved ones are visible
  * to end users at all. Anything this user has deleted (notification_deletes)
  * is excluded the same way — permanently, from their feed only.
+ *
+ * Also excludes anything created before this user registered
+ * (`n.created_at >= (SELECT created_at FROM users ...)`) — without this, a
+ * brand-new account saw the entire platform's notification history the
+ * moment they signed up, including business offers broadcast months
+ * before they ever had an account. A user's own personal notices
+ * (target_user_id = this user) can never predate their own account
+ * anyway, so this only ever trims old broadcasts.
  */
 async function getFeedForUser(userId, { page = 1, limit = 30 } = {}) {
   const pageLimit = Math.min(Math.max(parseInt(limit, 10) || 30, 1), 100);
@@ -219,9 +227,10 @@ async function getFeedForUser(userId, { page = 1, limit = 30 } = {}) {
      LEFT JOIN notification_reads r ON r.notification_id = n.id AND r.user_id = ?
      LEFT JOIN notification_deletes d ON d.notification_id = n.id AND d.user_id = ?
      WHERE n.status = 'approved' AND (n.target_user_id IS NULL OR n.target_user_id = ?) AND d.id IS NULL
+       AND n.created_at >= (SELECT created_at FROM users WHERE id = ?)
      ORDER BY n.created_at DESC
      LIMIT ? OFFSET ?`,
-    [userId, userId, userId, pageLimit, offset],
+    [userId, userId, userId, userId, pageLimit, offset],
   );
   const [[{ total }]] = await pool.query('SELECT FOUND_ROWS() AS total');
   const [[{ unreadCount }]] = await pool.query(
@@ -229,8 +238,9 @@ async function getFeedForUser(userId, { page = 1, limit = 30 } = {}) {
      LEFT JOIN notification_reads r ON r.notification_id = n.id AND r.user_id = ?
      LEFT JOIN notification_deletes d ON d.notification_id = n.id AND d.user_id = ?
      WHERE n.status = 'approved' AND (n.target_user_id IS NULL OR n.target_user_id = ?)
-       AND r.id IS NULL AND d.id IS NULL`,
-    [userId, userId, userId],
+       AND r.id IS NULL AND d.id IS NULL
+       AND n.created_at >= (SELECT created_at FROM users WHERE id = ?)`,
+    [userId, userId, userId, userId],
   );
 
   return {
@@ -250,10 +260,15 @@ async function markAsRead(notificationId, userId) {
 }
 
 async function markAllAsRead(userId) {
+  // Same visibility rule as getFeedForUser (approved + targeted-or-broadcast
+  // + not before registration) — otherwise this would insert read-receipts
+  // for notifications the user can never actually see, and "mark all read"
+  // would silently diverge from what "all" means in their own feed.
   const [visibleRows] = await pool.query(
     `SELECT id FROM notifications
-     WHERE status = 'approved' AND (target_user_id IS NULL OR target_user_id = ?)`,
-    [userId],
+     WHERE status = 'approved' AND (target_user_id IS NULL OR target_user_id = ?)
+       AND created_at >= (SELECT created_at FROM users WHERE id = ?)`,
+    [userId, userId],
   );
   if (visibleRows.length === 0) return;
 
@@ -294,13 +309,16 @@ async function deleteNotification(notificationId, userId) {
   );
 }
 
-/** "Clear all" — hides every notification currently visible to this user. */
+/** "Clear all" — hides every notification currently visible to this user
+ * (same visibility rule as getFeedForUser, registration-date cutoff
+ * included, so this never no-ops on "read all"'s idea of "all"). */
 async function deleteAllNotifications(userId) {
   const [visibleRows] = await pool.query(
     `SELECT n.id FROM notifications n
      LEFT JOIN notification_deletes d ON d.notification_id = n.id AND d.user_id = ?
-     WHERE n.status = 'approved' AND (n.target_user_id IS NULL OR n.target_user_id = ?) AND d.id IS NULL`,
-    [userId, userId],
+     WHERE n.status = 'approved' AND (n.target_user_id IS NULL OR n.target_user_id = ?) AND d.id IS NULL
+       AND n.created_at >= (SELECT created_at FROM users WHERE id = ?)`,
+    [userId, userId, userId],
   );
   if (visibleRows.length === 0) return;
 
