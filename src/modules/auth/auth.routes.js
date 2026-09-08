@@ -53,6 +53,24 @@ router.post(
   validate,
   controller.loginWithFacebook,
 );
+router.post(
+  '/apple',
+  [
+    body('identityToken').notEmpty().withMessage('identityToken is required'),
+    // Only ever sent by the client on the very first authorization —
+    // Apple never returns the name again after that, see
+    // auth.service.js's loginWithApple.
+    body('firstName').optional().trim(),
+    body('lastName').optional().trim(),
+  ],
+  validate,
+  controller.loginWithApple,
+);
+// No auth, no validation — this is Apple's own server redirecting a
+// browser here mid-flow (the Android web sign-in bridge), not an API
+// call from our own clients. See auth.service.js's
+// buildAppleAndroidCallbackRedirect for what it does.
+router.all('/apple/callback', controller.appleCallback);
 
 router.post(
   '/refresh',

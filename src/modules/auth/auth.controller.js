@@ -32,6 +32,24 @@ const loginWithFacebook = asyncHandler(async (req, res) => {
   res.json(result);
 });
 
+const loginWithApple = asyncHandler(async (req, res) => {
+  const result = await authService.loginWithApple(req.body);
+  res.json(result);
+});
+
+/**
+ * Public, unauthenticated bridge for the Android sign-in flow — see
+ * loginWithApple/buildAppleAndroidCallbackRedirect's comments in
+ * auth.service.js. Apple POSTs the authorization result here as
+ * application/x-www-form-urlencoded (response_mode=form_post); this just
+ * hands it straight back to the Android app via a custom-scheme redirect,
+ * it never touches req.user or issues any tokens itself.
+ */
+const appleCallback = asyncHandler(async (req, res) => {
+  const redirectUrl = authService.buildAppleAndroidCallbackRedirect({ ...req.query, ...req.body });
+  res.redirect(307, redirectUrl);
+});
+
 const refresh = asyncHandler(async (req, res) => {
   const { refreshToken } = req.body;
   const result = await authService.refresh({ refreshToken });
@@ -86,6 +104,8 @@ module.exports = {
   login,
   loginWithGoogle,
   loginWithFacebook,
+  loginWithApple,
+  appleCallback,
   refresh,
   logout,
   me,

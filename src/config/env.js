@@ -84,6 +84,21 @@ const env = {
     appSecret: process.env.FACEBOOK_APP_SECRET || null,
   },
 
+  apple: {
+    // A Sign in with Apple identity token's `aud` claim is whichever
+    // client ID actually requested it — the iOS app's own bundle ID for
+    // the native in-app flow, but the Services ID for the Android/web
+    // flow (Android has no native Apple SDK, so it goes through Apple's
+    // web sign-in page instead, configured under a Services ID). Both are
+    // legitimate for this one app, so loginWithApple() accepts either —
+    // see docs/APPLE_SIGN_IN_SETUP.md for how to obtain them.
+    bundleId: process.env.APPLE_BUNDLE_ID || 'com.albmap.app',
+    servicesId: process.env.APPLE_SERVICES_ID || null,
+    // Only used to build the deep link back into the Android app from
+    // appleCallback() below — the Android app's own applicationId.
+    androidPackageId: process.env.APPLE_ANDROID_PACKAGE_ID || 'com.albmap.app',
+  },
+
   seedAdmin: {
     email: process.env.SEED_ADMIN_EMAIL || 'admin@albmap.app',
     password: process.env.SEED_ADMIN_PASSWORD || 'ChangeThisPassword123!',
