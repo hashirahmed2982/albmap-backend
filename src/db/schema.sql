@@ -18,7 +18,7 @@ CREATE TABLE IF NOT EXISTS users (
   phone         VARCHAR(30)   NULL,
   profile_image_url VARCHAR(500) NULL,
   role          ENUM('business', 'admin') NOT NULL DEFAULT 'business',
-  auth_provider ENUM('password', 'google', 'facebook') NOT NULL DEFAULT 'password',
+  auth_provider ENUM('password', 'google', 'facebook', 'apple') NOT NULL DEFAULT 'password',
   -- The provider's own stable unique ID (Google's `sub` claim, Facebook's
   -- `id` field) — NOT the same as our own `id` above. Used to find the
   -- same account again on a repeat social login without relying on email

@@ -347,6 +347,137 @@ async function loginWithFacebook({ accessToken }) {
   return { user: toPublicUser(user), ...tokens };
 }
 
+// Cached across calls (module-level, not per-request) — jwks-rsa keeps its
+// own in-memory cache of Apple's signing keys internally, but recreating
+// the client itself on every request is pointless work either way.
+let _appleJwksClient = null;
+function getAppleJwksClient() {
+  if (!_appleJwksClient) {
+    const jwksClient = require('jwks-rsa');
+    _appleJwksClient = jwksClient({
+      jwksUri: 'https://appleid.apple.com/auth/keys',
+      cache: true,
+      cacheMaxAge: 24 * 60 * 60 * 1000, // Apple rotates these rarely; a day is plenty
+      rateLimit: true,
+    });
+  }
+  return _appleJwksClient;
+}
+
+/**
+ * Verifies an Apple identity token against Apple's own public keys
+ * (fetched/cached via jwks-rsa, matched by the token's `kid` header —
+ * Apple doesn't publish a fixed key like a static secret would, it
+ * rotates these, hence needing the JWKS dance instead of a simple
+ * verify-with-constant-key call like the rest of this app's JWTs use).
+ * Also checks `iss` is really Apple and `aud` is really THIS app —
+ * without the audience check, any valid Apple ID token minted for ANY
+ * app (not just this one's sign-in flow) would be accepted.
+ */
+function verifyAppleIdentityToken(identityToken) {
+  const jwt = require('jsonwebtoken');
+  const client = getAppleJwksClient();
+  const allowedAudiences = [env.apple.bundleId, env.apple.servicesId].filter(Boolean);
+
+  return new Promise((resolve, reject) => {
+    jwt.verify(
+      identityToken,
+      (header, callback) => {
+        client.getSigningKey(header.kid, (err, key) => {
+          if (err) return callback(err);
+          callback(null, key.getPublicKey());
+        });
+      },
+      {
+        algorithms: ['RS256'],
+        issuer: 'https://appleid.apple.com',
+        audience: allowedAudiences,
+      },
+      (err, payload) => {
+        if (err) return reject(err);
+        resolve(payload);
+      },
+    );
+  });
+}
+
+/**
+ * Apple only sends the user's name in the initial authorization response
+ * (as a separate `user` field the client gets alongside the identity
+ * token) — never again on any later sign-in, and never inside the
+ * identity token itself. So unlike Google/Facebook, the name has to come
+ * from the client on that first call, best-effort; every later login for
+ * the same person has no name available at all here, which is fine
+ * since findOrCreateSocialUser only uses it for the initial INSERT.
+ */
+async function loginWithApple({ identityToken, firstName, lastName }) {
+  if (!identityToken) {
+    throw ApiError.badRequest('Missing Apple identity token');
+  }
+  if (!env.apple.bundleId && !env.apple.servicesId) {
+    throw ApiError.internal(
+      'Apple sign-in is not configured on the server (APPLE_BUNDLE_ID/APPLE_SERVICES_ID unset)',
+    );
+  }
+
+  let payload;
+  try {
+    payload = await verifyAppleIdentityToken(identityToken);
+  } catch (err) {
+    throw ApiError.unauthorized('Invalid or expired Apple identity token');
+  }
+
+  if (!payload?.sub) {
+    throw ApiError.unauthorized('Apple identity token has no subject');
+  }
+
+  // Real address, or Apple's "Hide My Email" private relay address
+  // (something@privaterelay.appleid.com) if the user chose that — either
+  // way it behaves like any other email for this app's purposes (login,
+  // matching an existing password account, notifications).
+  const email = payload.email || null;
+  if (!email) {
+    throw ApiError.badRequest(
+      'Your Apple account has no email available. Please use email/password or Google sign-in instead.',
+    );
+  }
+
+  const name = [firstName, lastName].filter(Boolean).join(' ').trim() || email.split('@')[0];
+
+  const user = await findOrCreateSocialUser({
+    provider: 'apple',
+    providerUserId: payload.sub,
+    email,
+    name,
+    profileImageUrl: null, // Apple never provides a profile photo
+  });
+
+  if (!user.is_active) throw ApiError.forbidden(deactivatedAccountMessage(user));
+
+  const tokens = await issueTokenPair(user.id);
+  return { user: toPublicUser(user), ...tokens };
+}
+
+/**
+ * Bridges Apple's web sign-in flow back into the Android app (iOS/macOS
+ * never hit this — they get the identity token directly from the native
+ * AuthenticationServices SDK). Android has no native "Sign in with
+ * Apple" SDK, so the client opens Apple's own web authorization page
+ * instead; Apple can only redirect that page back to an HTTPS URL (not a
+ * custom app:// scheme), so this HTTPS endpoint is registered as that
+ * redirect target and its only job is to hand the result off to the app
+ * via a custom-scheme intent the sign_in_with_apple Android plugin is
+ * listening for (see AndroidManifest.xml's SignInWithAppleCallback
+ * activity) — same bridge pattern as the plugin's own reference server.
+ */
+function buildAppleAndroidCallbackRedirect(body) {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(body || {})) {
+    if (typeof value === 'string') params.append(key, value);
+  }
+  return `intent://callback?${params.toString()}#Intent;package=${env.apple.androidPackageId};scheme=signinwithapple;end`;
+}
+
 async function refresh({ refreshToken }) {
   if (!refreshToken) {
     throw ApiError.badRequest('Missing refresh token');
@@ -585,6 +716,8 @@ module.exports = {
   login,
   loginWithGoogle,
   loginWithFacebook,
+  loginWithApple,
+  buildAppleAndroidCallbackRedirect,
   refresh,
   logout,
   getCurrentUser,

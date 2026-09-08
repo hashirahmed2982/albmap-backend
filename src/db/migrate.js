@@ -55,6 +55,34 @@ async function ensureColumn(connection, database, { table, column, ddl }) {
 }
 
 /**
+ * ENUM columns widened after their CREATE TABLE was first written — same
+ * problem as COLUMNS_TO_ENSURE above (schema.sql's own definition only
+ * applies to a brand-new database), but a widened ENUM isn't a "missing
+ * column" ensureColumn() can detect, so it needs its own idempotency
+ * check: re-issuing the same MODIFY COLUMN is safe, but only worth doing
+ * when the target value isn't already in the column's current type string.
+ */
+const ENUM_VALUES_TO_ENSURE = [
+  {
+    table: 'users',
+    column: 'auth_provider',
+    value: 'apple',
+    ddl: "ALTER TABLE users MODIFY COLUMN auth_provider ENUM('password', 'google', 'facebook', 'apple') NOT NULL DEFAULT 'password'",
+  },
+];
+
+async function ensureEnumValue(connection, database, { table, column, value, ddl }) {
+  const [rows] = await connection.query(
+    `SELECT COLUMN_TYPE FROM information_schema.COLUMNS
+     WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? AND COLUMN_NAME = ?`,
+    [database, table, column],
+  );
+  if (rows.length === 0 || rows[0].COLUMN_TYPE.includes(`'${value}'`)) return;
+  console.log(`Widening ${table}.${column} to include '${value}'...`);
+  await connection.query(ddl);
+}
+
+/**
  * Runs schema.sql as a single multi-statement script, then applies any
  * columns added to an existing table since its CREATE TABLE was written
  * (see COLUMNS_TO_ENSURE above). This is intentionally simple (no
@@ -83,6 +111,11 @@ async function migrate() {
     console.log('Checking for columns missing from existing tables...');
     for (const entry of COLUMNS_TO_ENSURE) {
       await ensureColumn(connection, env.db.database, entry);
+    }
+
+    console.log('Checking for ENUM values missing from existing tables...');
+    for (const entry of ENUM_VALUES_TO_ENSURE) {
+      await ensureEnumValue(connection, env.db.database, entry);
     }
 
     console.log('✅ Migration complete');
