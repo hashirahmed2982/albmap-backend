@@ -160,9 +160,9 @@ async function sendOwnerInvite(user, business) {
  * street address — deliberately not just name-matching (a chain with
  * several branches sharing a name isn't a duplicate of itself) and not
  * just email-matching (one owner can have several real businesses).
- * Checked before geocoding, not after — no point spending a rate-limited
- * Nominatim request (see utils/geocode.js) resolving coordinates for a
- * row that's just going to be skipped anyway.
+ * Checked before geocoding, not after — no point spending a Google
+ * Geocoding API request (see utils/geocode.js) resolving coordinates for
+ * a row that's just going to be skipped anyway.
  *
  * This is what makes re-running the exact same CSV any number of times a
  * safe no-op for rows already imported — the admin doesn't need to hand-
@@ -252,12 +252,16 @@ async function importRow(row, adminId) {
 /**
  * Parses and imports every row in the uploaded CSV, one at a time (not a
  * bulk INSERT) — each row needs its own geocoding round-trip and
- * owner-resolution logic anyway, and processing sequentially keeps
- * Nominatim's rate limit (see utils/geocode.js) satisfied without extra
- * coordination. A single bad row (missing field, unresolvable address)
- * fails that row only — the rest of the file still imports, and the
- * failure is reported back by row number so the admin can fix and
- * re-import just that one.
+ * owner-resolution logic anyway, and processing sequentially avoids two
+ * rows for the same new owner email racing each other to create that
+ * account (see resolveOwner's comment). Now that geocoding is Google's
+ * API rather than Nominatim, there's no external rate limit forcing
+ * sequential processing anymore — this could parallelize the geocoding
+ * step specifically if import speed ever becomes a problem again, just
+ * not the owner-resolution step. A single bad row (missing field,
+ * unresolvable address) fails that row only — the rest of the file still
+ * imports, and the failure is reported back by row number so the admin
+ * can fix and re-import just that one.
  */
 async function importBusinessesFromCsv(buffer, adminId) {
   let records;

@@ -79,6 +79,17 @@ const env = {
     clientId: process.env.GOOGLE_CLIENT_ID || null,
   },
 
+  // Server-side geocoding for the CSV business import (utils/geocode.js) —
+  // a DIFFERENT key than the Android/iOS Maps SDK keys already baked into
+  // the app (those are restricted to this app's package name/bundle ID +
+  // signing fingerprint, which a plain server-to-server HTTP call has no
+  // way to present, so they won't work here). Create a separate key in
+  // Google Cloud Console with the Geocoding API enabled, restricted by
+  // server IP rather than app identity.
+  googleMaps: {
+    apiKey: process.env.GOOGLE_MAPS_GEOCODING_API_KEY || null,
+  },
+
   facebook: {
     appId: process.env.FACEBOOK_APP_ID || null,
     appSecret: process.env.FACEBOOK_APP_SECRET || null,
