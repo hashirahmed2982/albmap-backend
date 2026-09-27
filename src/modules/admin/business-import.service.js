@@ -9,22 +9,32 @@ const emailService = require('../notifications/email');
 const businessService = require('../businesses/business.service');
 
 /**
- * Maps the German column headers from the admin's past-platform export to
- * our own field names. Exact and case-sensitive on purpose — if a
- * differently-shaped export needs supporting later, add another header
- * variant here rather than trying to fuzzy-match arbitrary headers, which
- * would silently misfile a column no one actually checked.
+ * Header aliases per target field, tried in priority order — the first
+ * one actually present (and non-empty) in a given row wins. Exact and
+ * case-sensitive on purpose — if yet another differently-shaped export
+ * needs supporting later, add another alias here rather than trying to
+ * fuzzy-match arbitrary headers, which would silently misfile a column
+ * no one actually checked.
+ *
+ * Two shapes are supported:
+ * - The German columns from the admin's past-platform export (checked
+ *   first for `category`, see the comment on that in normalizeRow).
+ * - This app's OWN "export businesses to CSV" output (see
+ *   admin.service.js's exportBusinessesToCsv) — exporting, editing, and
+ *   re-importing that file is a completely reasonable thing an admin
+ *   would want to do, and previously failed on every single row since
+ *   none of its English headers matched anything here.
  */
-const COLUMN_MAP = {
-  Name: 'name',
-  Kategorie: 'category',
-  Adresse: 'streetAddress',
-  PLZ: 'postalCode',
-  Stadt: 'city',
-  Land: 'country',
-  Telefon: 'phone',
-  'E-Mail': 'email',
-  Website: 'website',
+const FIELD_ALIASES = {
+  name: ['Name'],
+  category: ['Kategorie', 'Category'],
+  streetAddress: ['Adresse', 'Street Address'],
+  postalCode: ['PLZ', 'Postal Code'],
+  city: ['Stadt', 'City'],
+  country: ['Land', 'Country'],
+  phone: ['Telefon', 'Phone'],
+  email: ['E-Mail', 'Owner Email'],
+  website: ['Website'],
 };
 
 /**
@@ -56,11 +66,36 @@ function mapCategory(raw) {
   return CATEGORY_MAP[raw.trim()] || 'Other';
 }
 
+/** Returns the first alias with a non-empty value in `rawRow`, and which
+ * alias it actually came from — the latter matters for `category` (see
+ * normalizeRow) where the two supported sources need different handling,
+ * not just different column names. */
+function firstNonEmpty(rawRow, aliases) {
+  for (const header of aliases) {
+    const value = (rawRow[header] || '').trim();
+    if (value) return { header, value };
+  }
+  return null;
+}
+
 function normalizeRow(rawRow) {
   const normalized = {};
-  for (const [csvHeader, field] of Object.entries(COLUMN_MAP)) {
-    normalized[field] = (rawRow[csvHeader] || '').trim() || null;
+  for (const [field, aliases] of Object.entries(FIELD_ALIASES)) {
+    if (field === 'category') continue; // handled below, separately
+    normalized[field] = firstNonEmpty(rawRow, aliases)?.value || null;
   }
+
+  // 'Kategorie' (the old platform's export) holds a German word that
+  // genuinely needs translating via mapCategory below. 'Category' (this
+  // app's own export) already holds a real, valid category name/slug
+  // straight from our own categories table — using mapCategory on THAT
+  // would run it through a lookup that only knows German words and
+  // coerce every single one down to 'Other', silently destroying
+  // already-correct data on a simple export-edit-reimport round trip.
+  const categoryMatch = firstNonEmpty(rawRow, FIELD_ALIASES.category);
+  normalized.category =
+    categoryMatch?.header === 'Kategorie' ? mapCategory(categoryMatch.value) : categoryMatch?.value || 'Other';
+
   return normalized;
 }
 
@@ -185,7 +220,7 @@ async function importRow(row, adminId) {
       businessId,
       owner.id,
       row.name,
-      mapCategory(row.category),
+      row.category, // already resolved (translated or passed through) by normalizeRow
       row.streetAddress,
       row.city,
       row.postalCode,
