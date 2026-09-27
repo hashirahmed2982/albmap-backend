@@ -38,64 +38,59 @@ const FIELD_ALIASES = {
 };
 
 /**
- * Best-effort German -> our own seeded category names (see db/seed.js's
- * CATEGORIES). Anything not listed here — including a category the CSV
- * simply doesn't set — falls back to 'Other', the same safe catch-all the
- * rest of the app already uses for an unrecognized category, rather than
- * inventing a new category string that wouldn't match anything in the
- * categories table. An admin can always correct a specific business's
- * category afterward via the normal edit flow.
+ * Loads every real category's English name plus its German/Albanian
+ * translations from the categories table (categories are admin-managed/
+ * free-form now, not a fixed hardcoded set — see db/seed.js's CATEGORIES
+ * for just the originally-seeded ones), as a single lowercased lookup:
+ * whichever language a CSV's category value happens to be written in,
+ * it resolves back to the one canonical English name actually stored on
+ * businesses.category. Loaded once per import run (not once per row)
+ * and passed down as a plain Map, keeping the actual per-row resolution
+ * synchronous and cheap.
  */
-const CATEGORY_MAP = {
-  Restaurant: 'Restaurants',
-  Restaurants: 'Restaurants',
-  Café: 'Cafes',
-  Cafe: 'Cafes',
-  Bäckerei: 'Shops',
-  Bekleidung: 'Shops',
-  Autohandel: 'Shops',
-  Handwerk: 'Services',
-  Dienstleistung: 'Services',
-  Gesundheit: 'Health',
-  Unterhaltung: 'Entertainment',
-  Sonstiges: 'Other',
-};
-
-function mapCategory(raw) {
-  if (!raw) return 'Other';
-  return CATEGORY_MAP[raw.trim()] || 'Other';
+async function loadCategoryLookup() {
+  const [rows] = await pool.query('SELECT name, name_de, name_sq FROM categories');
+  const lookup = new Map();
+  for (const row of rows) {
+    for (const value of [row.name, row.name_de, row.name_sq]) {
+      if (value) lookup.set(value.trim().toLowerCase(), row.name);
+    }
+  }
+  return lookup;
 }
 
-/** Returns the first alias with a non-empty value in `rawRow`, and which
- * alias it actually came from — the latter matters for `category` (see
- * normalizeRow) where the two supported sources need different handling,
- * not just different column names. */
+/**
+ * A category value is used as-is (case/whitespace aside) only if it
+ * actually matches one of our own categories in English, German, or
+ * Albanian — anything else (a category from a different platform's own
+ * scheme, a typo, an empty cell) falls back to 'Other', the same safe
+ * catch-all the rest of the app already uses for an unrecognized
+ * category, rather than inventing a new category string that wouldn't
+ * match anything in the categories table. An admin can always correct a
+ * specific business's category afterward via the normal edit flow.
+ */
+function resolveCategory(raw, categoryLookup) {
+  if (!raw) return 'Other';
+  return categoryLookup.get(raw.trim().toLowerCase()) || 'Other';
+}
+
+/** Returns the first alias with a non-empty value in `rawRow` — tries
+ * each in FIELD_ALIASES' priority order and returns the first hit. */
 function firstNonEmpty(rawRow, aliases) {
   for (const header of aliases) {
     const value = (rawRow[header] || '').trim();
-    if (value) return { header, value };
+    if (value) return value;
   }
   return null;
 }
 
-function normalizeRow(rawRow) {
+function normalizeRow(rawRow, categoryLookup) {
   const normalized = {};
   for (const [field, aliases] of Object.entries(FIELD_ALIASES)) {
-    if (field === 'category') continue; // handled below, separately
-    normalized[field] = firstNonEmpty(rawRow, aliases)?.value || null;
+    if (field === 'category') continue; // resolved separately below
+    normalized[field] = firstNonEmpty(rawRow, aliases);
   }
-
-  // 'Kategorie' (the old platform's export) holds a German word that
-  // genuinely needs translating via mapCategory below. 'Category' (this
-  // app's own export) already holds a real, valid category name/slug
-  // straight from our own categories table — using mapCategory on THAT
-  // would run it through a lookup that only knows German words and
-  // coerce every single one down to 'Other', silently destroying
-  // already-correct data on a simple export-edit-reimport round trip.
-  const categoryMatch = firstNonEmpty(rawRow, FIELD_ALIASES.category);
-  normalized.category =
-    categoryMatch?.header === 'Kategorie' ? mapCategory(categoryMatch.value) : categoryMatch?.value || 'Other';
-
+  normalized.category = resolveCategory(firstNonEmpty(rawRow, FIELD_ALIASES.category), categoryLookup);
   return normalized;
 }
 
@@ -220,7 +215,7 @@ async function importRow(row, adminId) {
       businessId,
       owner.id,
       row.name,
-      row.category, // already resolved (translated or passed through) by normalizeRow
+      row.category, // already resolved against categoryLookup by normalizeRow
       row.streetAddress,
       row.city,
       row.postalCode,
@@ -274,6 +269,8 @@ async function importBusinessesFromCsv(buffer, adminId) {
     throw ApiError.badRequest('CSV file has no data rows');
   }
 
+  const categoryLookup = await loadCategoryLookup();
+
   const results = {
     imported: 0,
     linkedToExistingUser: 0,
@@ -285,7 +282,7 @@ async function importBusinessesFromCsv(buffer, adminId) {
   for (let i = 0; i < records.length; i += 1) {
     const rowNumber = i + 2; // +1 for 0-index, +1 for the header row itself
     try {
-      const normalized = normalizeRow(records[i]);
+      const normalized = normalizeRow(records[i], categoryLookup);
       const result = await importRow(normalized, adminId);
       if (result.duplicate) {
         results.duplicatesSkipped.push({ row: rowNumber, name: records[i].Name || null });
