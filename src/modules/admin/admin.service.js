@@ -242,6 +242,36 @@ async function reviewBusiness(businessId, adminId, decision, reason) {
   return updated;
 }
 
+/**
+ * The admin portal's "Invite" button for a business whose owner account
+ * is still 'invited' (CSV-imported, no password set yet) — re-fires the
+ * exact same invite email importRow's first send did, with a fresh
+ * token (see business-import.service.js's sendOwnerInvite). The business
+ * itself is already live on the map regardless — this is purely about
+ * giving the owner another way in if the first email never reached them
+ * (spam folder, wrong inbox, etc.), not a gate on visibility.
+ */
+async function resendOwnerInvite(businessId) {
+  const [rows] = await pool.query(
+    `SELECT b.name AS business_name, owner.id AS owner_id, owner.name AS owner_name,
+            owner.email AS owner_email, owner.account_status AS owner_account_status
+     FROM businesses b
+     JOIN users owner ON owner.id = b.owner_id
+     WHERE b.id = ?`,
+    [businessId],
+  );
+  const row = rows[0];
+  if (!row) throw ApiError.notFound('Business not found');
+  if (row.owner_account_status !== 'invited') {
+    throw ApiError.conflict('This business\'s owner account is already active — there\'s no invite to resend.');
+  }
+
+  await businessImportService.sendOwnerInvite(
+    { id: row.owner_id, name: row.owner_name, email: row.owner_email },
+    { name: row.business_name },
+  );
+}
+
 async function deactivateBusiness(businessId, isActive, adminId, reason) {
   // Deactivating (not reactivating) requires an explanation — the same
   // reasoning as a rejection: the owner needs something actionable, not
@@ -570,6 +600,7 @@ module.exports = {
   getPendingBusinesses,
   getAllBusinesses,
   reviewBusiness,
+  resendOwnerInvite,
   deactivateBusiness,
   exportBusinessesToCsv,
   getAllUsers,

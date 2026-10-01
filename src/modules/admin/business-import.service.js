@@ -136,7 +136,11 @@ async function resolveOwner(email, businessName) {
  * table — see auth.service.js's resetPassword() for the consuming side.
  * Kept here rather than calling into auth.service.js directly since this
  * needs sendBusinessOwnerInviteEmail's distinct copy, not
- * sendPasswordResetEmail's.
+ * sendPasswordResetEmail's. Exported (see module.exports below) so
+ * admin.service.js's resendOwnerInvite can fire this same email again on
+ * demand — every call issues a fresh token, so an old link from a
+ * previous send simply stops working rather than there being two live
+ * tokens for the same account.
  */
 async function sendOwnerInvite(user, business) {
   const rawToken = crypto.randomBytes(32).toString('hex');
@@ -175,13 +179,18 @@ async function findDuplicateBusiness(email, name, streetAddress) {
 }
 
 /**
- * Imports one already-normalized row. Always lands as 'pending' —
- * regardless of whatever Status/Verifiziert the CSV itself claims — since
- * those describe the *old* platform's own decision, not a review this
- * admin has actually made here. Every imported business goes through the
- * exact same Pending Review queue as a normal submission, with the
- * additional owner-account-activation gate on top (see
- * admin.service.js's reviewBusiness()).
+ * Imports one already-normalized row. Lands as 'approved' immediately —
+ * NOT 'pending' the way a business submitted through the app does — so
+ * it shows up on the map/in search right away, regardless of whatever
+ * Status/Verifiziert the CSV itself claims and regardless of whether the
+ * owner account this links to is brand-new ('invited', no password set
+ * yet) or already active. A CSV import is itself the admin's review —
+ * these are businesses the admin already knows about and is deliberately
+ * bulk-adding, not an unvetted public submission — so there's no
+ * Pending Review step to wait on, and none of reviewBusiness()'s
+ * owner-account-activation gate applies here (that gate only fires when
+ * an admin clicks Approve on an actually-pending business; this never
+ * goes through that path at all).
  */
 async function importRow(row, adminId) {
   if (!row.name || !row.streetAddress || !row.city || !row.postalCode || !row.email) {
@@ -209,8 +218,8 @@ async function importRow(row, adminId) {
   await pool.query(
     `INSERT INTO businesses
       (id, owner_id, name, category, street_address, city, postal_code, country,
-       latitude, longitude, phone, website, status)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
+       latitude, longitude, phone, website, status, reviewed_by, reviewed_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'approved', ?, NOW())`,
     [
       businessId,
       owner.id,
@@ -224,11 +233,12 @@ async function importRow(row, adminId) {
       coords.longitude,
       row.phone,
       row.website,
+      adminId,
     ],
   );
   await pool.query(
     `INSERT INTO business_status_history (id, business_id, old_status, new_status, reason, changed_by)
-     VALUES (?, ?, NULL, 'pending', 'Imported from CSV', ?)`,
+     VALUES (?, ?, NULL, 'approved', 'Imported from CSV (auto-approved)', ?)`,
     [uuidv4(), businessId, adminId],
   );
   await pool.query('INSERT INTO business_analytics (business_id) VALUES (?)', [businessId]);
@@ -302,4 +312,11 @@ async function importBusinessesFromCsv(buffer, adminId) {
   return results;
 }
 
-module.exports = { importBusinessesFromCsv };
+module.exports = {
+  importBusinessesFromCsv,
+  // Reused by admin.service.js's resendOwnerInvite — the "Invite" button
+  // on the admin portal's businesses table for a business whose owner
+  // account is still 'invited' sends the exact same email this fires on
+  // first import, just triggerable again on demand instead of only once.
+  sendOwnerInvite,
+};

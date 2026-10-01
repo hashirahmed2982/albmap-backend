@@ -67,6 +67,13 @@ router.patch(
   controller.setBusinessActive,
 );
 router.post('/businesses/import', csvUpload.single('file'), controller.importBusinessesCsv);
+// "Invite" button on the admin portal's businesses table, for a row
+// whose ownerAccountStatus is 'invited' (see business.service.js's
+// toAdminBusiness) — re-sends the same invite email with a fresh token.
+// admin.service.js's resendOwnerInvite itself rejects (409) a business
+// whose owner account is already active, so there's no separate route-
+// level check needed here.
+router.post('/businesses/:id/resend-invite', controller.resendOwnerInvite);
 
 router.get('/users', controller.getAllUsers);
 router.get('/users/export.csv', controller.exportUsersCsv);
