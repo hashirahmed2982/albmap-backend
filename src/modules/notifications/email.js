@@ -1,4 +1,5 @@
 const nodemailer = require('nodemailer');
+const QRCode = require('qrcode');
 const env = require('../../config/env');
 const { pool } = require('../../config/db');
 
@@ -29,7 +30,7 @@ function getTransporter() {
   return transporter;
 }
 
-async function sendEmail({ to, subject, html, text }) {
+async function sendEmail({ to, subject, html, text, attachments }) {
   const t = getTransporter();
   if (!t) {
     console.log(`[EMAIL DISABLED] Would send "${subject}" to ${to}`);
@@ -37,7 +38,7 @@ async function sendEmail({ to, subject, html, text }) {
   }
 
   try {
-    await t.sendMail({ from: env.smtp.fromAddress, to, subject, html, text });
+    await t.sendMail({ from: env.smtp.fromAddress, to, subject, html, text, attachments });
     return { sent: true };
   } catch (err) {
     // A failed email should never fail the request that triggered it
@@ -58,6 +59,20 @@ const emailWrapper = (bodyHtml) => `
     <p style="margin-top: 32px; font-size: 12px; color: #8A8880;">AlbMap — Discover local businesses & events in Albania.</p>
   </div>
 `;
+
+/**
+ * Renders `url` as a QR PNG and returns it as a nodemailer attachment
+ * with a Content-ID — embed it inline in an email's HTML via
+ * `<img src="cid:${cid}">` (NOT a regular <img src="data:..."> or a
+ * hosted image URL; most mail clients block/strip both of those, but a
+ * cid-referenced attachment renders inline the same way a forwarded
+ * photo does). Used only by sendBusinessOwnerInviteEmail's two app-store
+ * QR codes.
+ */
+async function qrAttachment(url, cid) {
+  const buffer = await QRCode.toBuffer(url, { type: 'png', margin: 1, width: 240 });
+  return { filename: `${cid}.png`, content: buffer, cid };
+}
 
 async function sendWelcomeEmail(user) {
   return sendEmail({
@@ -337,39 +352,116 @@ async function sendNotificationRejectedEmail(user, notification, reason) {
 }
 
 /**
- * Sent when an admin's CSV business import creates a brand-new account on
- * an owner's behalf (see business-import.service.js) — this is their
- * first-ever contact from AlbMap, so the copy explains why an account
- * exists at all before asking them to set a password for it. Reuses the
- * exact same link shape and consuming endpoint as sendPasswordResetEmail
- * (POST /auth/reset-password with this token) — see auth.service.js's
- * resetPassword(), which additionally flips a freshly-invited account
- * from account_status='invited' to 'active' the moment this completes,
- * which is what actually unblocks the linked business for admin approval.
+ * The marketing invitation copy itself — Albanian/German/English/French,
+ * in that order, each with its own 📍 intro line, body paragraph, and a
+ * bold CTA linking to the public site. Verbatim client-provided copy;
+ * kept as plain data (not hardcoded into the HTML template below) so the
+ * four languages render identically instead of needing four near-
+ * duplicate blocks of markup.
+ */
+const OWNER_INVITE_PITCH = [
+  {
+    intro: 'Hej, ti je shqiptar/e dhe jeton jashtë atdheut.',
+    body: 'Bëhu i dukshëm për njerëzit e tu dhe përfito me biznesin tënd atje ku jeton dhe punon. AlbMap është unike — na lidh si komb, kudo në botë, me besimin tonë shqiptar.',
+    cta: 'Bëhu pjesë tani',
+  },
+  {
+    intro: 'Hey, du bist Albaner/in und lebst im Ausland.',
+    body: 'Mach dich sichtbar für deine Leute und profitiere mit deinem Geschäft dort, wo du lebst und arbeitest. AlbMap ist einzigartig – sie verbindet unsere Nation überall auf der Welt, mit unserem albanischen Vertrauen.',
+    cta: 'Werde jetzt Teil davon',
+  },
+  {
+    intro: "Hey, you're Albanian and you live abroad.",
+    body: 'Make yourself visible to your people and benefit with your business right where you live and work. AlbMap is unique — it connects our nation everywhere in the world, built on our Albanian trust.',
+    cta: 'Be part of it now',
+  },
+  {
+    intro: "Hé, tu es albanais(e) et tu vis à l'étranger.",
+    body: "Rends-toi visible auprès des tiens et profites-en avec ton entreprise là où tu vis et travailles. AlbMap est unique — elle relie notre nation partout dans le monde, avec notre confiance albanaise.",
+    cta: 'Rejoins-nous dès maintenant',
+  },
+];
+
+function ownerInvitePitchHtml() {
+  return OWNER_INVITE_PITCH.map(
+    ({ intro, body, cta }, i) => `
+      ${i > 0 ? '<hr style="border: none; border-top: 1px solid #EAE8E3; margin: 20px 0;" />' : ''}
+      <p style="color: #1A1D1C; line-height: 1.6;">📍 <em>${intro}</em></p>
+      <p style="color: #52514D; line-height: 1.6;">${body}</p>
+      <p style="line-height: 1.6;">👉 <a href="https://www.albmap.app" style="color: #E31320; font-weight: 700; text-decoration: none;">${cta}: www.albmap.app</a></p>
+    `,
+  ).join('');
+}
+
+function ownerInvitePitchText() {
+  return OWNER_INVITE_PITCH.map(({ intro, body, cta }) => `${intro}\n${body}\n${cta}: https://www.albmap.app`).join(
+    '\n\n---\n\n',
+  );
+}
+
+/**
+ * Sent both when an admin's CSV business import creates a brand-new
+ * account on an owner's behalf (see business-import.service.js) AND
+ * whenever an admin re-triggers it from the admin portal's "Invite"
+ * button for a business whose owner still hasn't activated their
+ * account — same email either time, just a freshly-issued token each
+ * send (see sendOwnerInvite in business-import.service.js, which both
+ * paths call through).
+ *
+ * QR codes for both app stores go first, per the client-provided
+ * template, followed by the four-language invitation pitch verbatim,
+ * and — separately, since it's the one actually functional part of this
+ * email rather than marketing copy — a "set your password" link at the
+ * bottom. That link reuses the exact same shape and consuming endpoint
+ * as sendPasswordResetEmail (POST /auth/reset-password with this token)
+ * — see auth.service.js's resetPassword(), which flips the account from
+ * account_status='invited' to 'active' once completed. The business
+ * itself is already live on the map the moment it's imported regardless
+ * of whether this is ever clicked (see business-import.service.js's
+ * importRow) — this step is only about the owner actually being able to
+ * log in and manage it, not about visibility.
  */
 async function sendBusinessOwnerInviteEmail(user, business, rawToken) {
   const setPasswordLink = `${env.websiteUrl}/reset-password?token=${rawToken}`;
+  const [androidQr, iosQr] = await Promise.all([
+    qrAttachment(env.appStore.android, 'qr-android'),
+    qrAttachment(env.appStore.ios, 'qr-ios'),
+  ]);
+
   return sendEmail({
     to: user.email,
-    subject: `"${business.name}" is on AlbMap — set your password to manage it`,
+    subject: `"${business.name}" is live on AlbMap — join us!`,
+    attachments: [androidQr, iosQr],
     html: emailWrapper(`
-      <h1 style="font-size: 20px; color: #1A1D1C;">Welcome to AlbMap</h1>
+      <table role="presentation" style="width: 100%; margin-bottom: 24px;">
+        <tr>
+          <td style="text-align: center; padding: 0 8px;">
+            <img src="cid:qr-android" width="140" height="140" alt="Android QR code" style="display: block; margin: 0 auto;" />
+            <p style="font-size: 12px; color: #8A8880; margin-top: 6px;">Android</p>
+          </td>
+          <td style="text-align: center; padding: 0 8px;">
+            <img src="cid:qr-ios" width="140" height="140" alt="iOS QR code" style="display: block; margin: 0 auto;" />
+            <p style="font-size: 12px; color: #8A8880; margin-top: 6px;">iOS</p>
+          </td>
+        </tr>
+      </table>
+
+      ${ownerInvitePitchHtml()}
+
+      <hr style="border: none; border-top: 1px solid #EAE8E3; margin: 24px 0;" />
+
       <p style="color: #52514D; line-height: 1.6;">
-        An AlbMap admin has added "<strong>${business.name}</strong>" to the platform and created
-        an account for you at this email address. Set a password to activate your account and
-        start managing your listing.
+        "<strong>${business.name}</strong>" is already live on AlbMap. Set a password for the
+        account we created at this email address to actually manage it — edit details, add
+        photos, post events.
       </p>
-      <p style="color: #52514D; line-height: 1.6;">
-        Your business won't be visible to the public until you've set your password and an
-        admin has reviewed and approved it.
-      </p>
-      <a href="${setPasswordLink}" style="display: inline-block; margin-top: 16px; padding: 12px 24px; background: #E31320; color: white; text-decoration: none; border-radius: 999px; font-weight: 600;">Set your password</a>
+      <a href="${setPasswordLink}" style="display: inline-block; margin-top: 12px; padding: 12px 24px; background: #E31320; color: white; text-decoration: none; border-radius: 999px; font-weight: 600;">Set your password</a>
       <p style="color: #8A8880; font-size: 13px; margin-top: 24px;">
         This link expires in 1 hour. If you weren't expecting this, you can safely ignore it —
         no account will be usable until this step is completed.
       </p>
     `),
-    text: `"${business.name}" has been added to AlbMap and an account was created for you at this email. Set your password to activate it: ${setPasswordLink} (expires in 1 hour)`,
+    text: `${ownerInvitePitchText()}\n\n---\n\n"${business.name}" is already live on AlbMap. Set a password for the account we created at this email to manage it: ${setPasswordLink} (expires in 1 hour)`,
   });
 }
 

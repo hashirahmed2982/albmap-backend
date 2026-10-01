@@ -68,6 +68,17 @@ const env = {
 
   websiteUrl: process.env.WEBSITE_URL || 'http://localhost:3001',
 
+  // Same "ordered, not live yet" placeholders as the website's own
+  // src/lib/app-links.ts — used for the QR codes in the business-owner
+  // invite email (notifications/email.js). Override via env the moment
+  // the app actually ships, or sooner if a TestFlight/internal-testing
+  // link exists ahead of a full release — everything else about the
+  // email works unchanged once these point somewhere real.
+  appStore: {
+    android: process.env.ANDROID_PLAY_STORE_URL || 'https://play.google.com/store/apps/details?id=com.albmap.app',
+    ios: process.env.IOS_APP_STORE_URL || 'https://apps.apple.com/app/albmap/id0000000000',
+  },
+
    google: {
     // The "audience" a Google ID token must have been issued for — this
     // is what actually proves the token was meant for THIS app, not some

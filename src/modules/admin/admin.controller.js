@@ -29,6 +29,11 @@ const reviewBusiness = asyncHandler(async (req, res) => {
   res.json(business);
 });
 
+const resendOwnerInvite = asyncHandler(async (req, res) => {
+  await adminService.resendOwnerInvite(req.params.id);
+  res.status(204).send();
+});
+
 const setBusinessActive = asyncHandler(async (req, res) => {
   const business = await adminService.deactivateBusiness(
     req.params.id,
@@ -150,6 +155,7 @@ module.exports = {
   getPendingBusinesses,
   getAllBusinesses,
   reviewBusiness,
+  resendOwnerInvite,
   setBusinessActive,
   importBusinessesCsv,
   exportBusinessesCsv,
