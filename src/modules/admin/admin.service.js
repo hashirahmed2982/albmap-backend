@@ -1,7 +1,10 @@
 const { v4: uuidv4 } = require('uuid');
 const bcrypt = require('bcryptjs');
+const fs = require('fs/promises');
+const path = require('path');
 const { stringify } = require('csv-stringify/sync');
 const { pool } = require('../../config/db');
+const env = require('../../config/env');
 const ApiError = require('../../utils/ApiError');
 const businessService = require('../businesses/business.service');
 const eventService = require('../events/event.service');
@@ -477,6 +480,84 @@ async function setUserActive(userId, isActive, reason) {
   }
 }
 
+/**
+ * Best-effort local-disk cleanup for an uploaded image (profile photo,
+ * business logo, event image) — see middleware/upload.js and
+ * business.controller.js/user.routes.js/event.routes.js, which all store
+ * the public-facing value as a SERVER-RELATIVE path ("/uploads/xxx.png"),
+ * not a full URL. Only ever touches a path under our own uploads dir —
+ * a social-login profile photo (a full `https://...` URL from Google/
+ * Facebook/Apple) fails the prefix check and is silently left alone,
+ * since that file doesn't live on this server to begin with. Failures
+ * (including "already gone") never block the caller — losing a stray
+ * image file on disk is a non-issue; failing the actual account deletion
+ * over it would not be.
+ */
+async function deleteUploadedFile(relativePath) {
+  if (!relativePath || typeof relativePath !== 'string') return;
+  const prefix = `/${env.uploads.dir}/`;
+  if (!relativePath.startsWith(prefix)) return;
+
+  const absolutePath = path.join(process.cwd(), relativePath);
+  try {
+    await fs.unlink(absolutePath);
+  } catch (err) {
+    if (err.code !== 'ENOENT') {
+      // eslint-disable-next-line no-console
+      console.error(`deleteUploadedFile: failed to remove ${absolutePath}:`, err.message);
+    }
+  }
+}
+
+/**
+ * Permanently deletes a business user's account AND every trace of their
+ * data on the platform — unlike setUserActive's ban (reversible, keeps
+ * everything), this is irreversible by design (the admin portal gates it
+ * behind a typed "DELETE" confirmation for exactly that reason). Deleting
+ * the `users` row is the entire operation: schema.sql's ON DELETE CASCADE
+ * chain takes care of the rest in one go —
+ *   users -> businesses -> business_status_history, business_analytics,
+ *            business_analytics_daily, events -> event_favorites,
+ *            event_interests, notifications (per-business)
+ *   users -> refresh_tokens, password_reset_tokens, reviews, favorites,
+ *            event_favorites, event_interests, notification_reads,
+ *            notification_deletes, notifications (target_user_id)
+ * The only things gathered up front are the on-disk image paths, which a
+ * DELETE can't reach on its own — fetched BEFORE the cascade removes the
+ * rows that reference them, deleted from disk only AFTER the DB delete
+ * actually succeeds.
+ */
+async function deleteUserAccount(userId) {
+  const [userRows] = await pool.query(
+    'SELECT id, email, name, profile_image_url, role FROM users WHERE id = ?',
+    [userId],
+  );
+  const user = userRows[0];
+  if (!user) throw ApiError.notFound('User not found');
+  // Admin accounts have their own dedicated flow (deleteAdmin above), with
+  // its own "not yourself / not the last admin" safety rails that don't
+  // apply to a business user at all — this endpoint only ever operates on
+  // the Users table's role='business' rows.
+  if (user.role !== 'business') {
+    throw ApiError.badRequest('Admin accounts are removed from the Admins section, not here');
+  }
+
+  const [businessRows] = await pool.query('SELECT logo_url FROM businesses WHERE owner_id = ?', [userId]);
+  const [eventRows] = await pool.query(
+    `SELECT e.image_url FROM events e JOIN businesses b ON b.id = e.business_id WHERE b.owner_id = ?`,
+    [userId],
+  );
+
+  const [result] = await pool.query('DELETE FROM users WHERE id = ? AND role = "business"', [userId]);
+  if (result.affectedRows === 0) throw ApiError.notFound('User not found');
+
+  await Promise.all([
+    deleteUploadedFile(user.profile_image_url),
+    ...businessRows.map((b) => deleteUploadedFile(b.logo_url)),
+    ...eventRows.map((e) => deleteUploadedFile(e.image_url)),
+  ]);
+}
+
 // ---------------- Event moderation ----------------
 
 const EVENT_SORT_COLUMNS = { name: 'e.name', startTime: 'e.start_time' };
@@ -606,6 +687,7 @@ module.exports = {
   getAllUsers,
   exportUsersToCsv,
   setUserActive,
+  deleteUserAccount,
   // Business CSV import — same thin-delegation pattern as categories/
   // notifications/content above.
   importBusinessesFromCsv: businessImportService.importBusinessesFromCsv,

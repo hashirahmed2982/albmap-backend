@@ -90,6 +90,10 @@ router.patch(
   validate,
   controller.setUserActive,
 );
+// Permanent, irreversible account deletion — the admin portal gates this
+// behind a typed "DELETE" confirmation client-side precisely because
+// there's no reason/undo path afterward the way there is for a ban.
+router.delete('/users/:id', controller.deleteUser);
 
 router.get('/events', controller.getAllEvents);
 router.patch('/events/:id/active', controller.setEventActive);

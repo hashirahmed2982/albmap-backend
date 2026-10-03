@@ -79,6 +79,11 @@ const setUserActive = asyncHandler(async (req, res) => {
   res.status(204).send();
 });
 
+const deleteUser = asyncHandler(async (req, res) => {
+  await adminService.deleteUserAccount(req.params.id);
+  res.status(204).send();
+});
+
 const getAllEvents = asyncHandler(async (req, res) => {
   const { search, dateFrom, dateTo, page, limit, sortBy, sortOrder } = req.query;
   const result = await adminService.getAllEvents({ search, dateFrom, dateTo, page, limit, sortBy, sortOrder });
@@ -162,6 +167,7 @@ module.exports = {
   getAllUsers,
   exportUsersCsv,
   setUserActive,
+  deleteUser,
   getAllEvents,
   setEventActive,
   getAllAdmins,
