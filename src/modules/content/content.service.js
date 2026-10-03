@@ -4,17 +4,23 @@ const ApiError = require('../../utils/ApiError');
 // Every page an admin can edit here — adding a fifth one later means
 // adding its key + validateShape() case, not a migration (see
 // site_content's table comment in schema.sql).
-const ALLOWED_KEYS = ['about_us', 'social_links', 'privacy_policy', 'terms_conditions'];
+const ALLOWED_KEYS = ['about_us', 'social_links', 'privacy_policy', 'terms_conditions', 'home_hero'];
 
-// These three are actual copy shown to end users, so they must be
-// entered in all of SUPPORTED_LOCALES — social_links is deliberately
-// not here: a Facebook/Instagram/etc. URL is the same regardless of
-// language, so it stays a single flat object instead of one per locale.
-const LOCALIZED_KEYS = ['about_us', 'privacy_policy', 'terms_conditions'];
+// These are actual copy shown to end users, so they must be entered in
+// all of SUPPORTED_LOCALES — social_links is deliberately not here: a
+// Facebook/Instagram/etc. URL is the same regardless of language, so it
+// stays a single flat object instead of one per locale.
+const LOCALIZED_KEYS = ['about_us', 'privacy_policy', 'terms_conditions', 'home_hero'];
 const SUPPORTED_LOCALES = ['en', 'de', 'sq'];
 
 const REQUIRED_STRING_FIELDS = {
   about_us: ['tagline', 'missionTitle', 'missionBody', 'visionTitle', 'visionBody'],
+  // The website's homepage hero (title split across two lines + a
+  // subtitle) — previously hardcoded per-language in the website's own
+  // next-intl message files (messages/en.json etc.), which still exist
+  // and now serve only as the fallback copy shown before an admin has
+  // ever saved this key.
+  home_hero: ['titlePart1', 'titlePart2', 'subtitle'],
 };
 
 // Every field is optional here — a business only fills in the platforms
