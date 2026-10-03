@@ -54,9 +54,14 @@ const exportBusinessesCsv = asyncHandler(async (req, res) => {
 });
 
 const getAllUsers = asyncHandler(async (req, res) => {
-  const { search, dateFrom, dateTo, page, limit, sortBy, sortOrder } = req.query;
-  const result = await adminService.getAllUsers({ search, dateFrom, dateTo, page, limit, sortBy, sortOrder });
+  const { status, search, dateFrom, dateTo, page, limit, sortBy, sortOrder } = req.query;
+  const result = await adminService.getAllUsers({ status, search, dateFrom, dateTo, page, limit, sortBy, sortOrder });
   res.json(result);
+});
+
+const resendUserInvite = asyncHandler(async (req, res) => {
+  await adminService.resendUserInvite(req.params.id);
+  res.status(204).send();
 });
 
 const exportUsersCsv = asyncHandler(async (req, res) => {
@@ -168,6 +173,7 @@ module.exports = {
   exportUsersCsv,
   setUserActive,
   deleteUser,
+  resendUserInvite,
   getAllEvents,
   setEventActive,
   getAllAdmins,

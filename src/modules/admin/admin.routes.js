@@ -94,6 +94,11 @@ router.patch(
 // behind a typed "DELETE" confirmation client-side precisely because
 // there's no reason/undo path afterward the way there is for a ban.
 router.delete('/users/:id', controller.deleteUser);
+// "Invite" button on the Users table for a row whose accountStatus is
+// 'invited' — same email as the Businesses table's resend-invite, just
+// addressed by user id. resendUserInvite itself rejects (409) a user
+// whose account is already active.
+router.post('/users/:id/resend-invite', controller.resendUserInvite);
 
 router.get('/events', controller.getAllEvents);
 router.patch('/events/:id/active', controller.setEventActive);

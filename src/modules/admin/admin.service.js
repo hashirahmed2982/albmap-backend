@@ -336,11 +336,23 @@ async function deactivateBusiness(businessId, isActive, adminId, reason) {
 
 const USER_SORT_COLUMNS = { name: 'name', createdAt: 'created_at' };
 
-async function getAllUsers({ search, dateFrom, dateTo, page, limit, sortBy, sortOrder } = {}) {
+async function getAllUsers({ status, search, dateFrom, dateTo, page, limit, sortBy, sortOrder } = {}) {
   const { pageNum, pageLimit, offset } = pageParams(page, limit);
 
   let sql = `SELECT SQL_CALC_FOUND_ROWS id, email, name, phone, role, is_active, deactivation_reason, account_status, created_at FROM users WHERE role = 'business'`;
   const params = [];
+  // Mirrors the 3 states the admin portal's StatusBadge combination
+  // actually shows per row (active / banned / invited) — 'invited' is
+  // account_status alone regardless of is_active (a CSV-imported account
+  // is always active=1 until explicitly banned), so it's checked first
+  // and independently rather than folded into the is_active branches.
+  if (status === 'invited') {
+    sql += ` AND account_status = 'invited'`;
+  } else if (status === 'active') {
+    sql += ` AND is_active = 1 AND account_status = 'active'`;
+  } else if (status === 'inactive') {
+    sql += ' AND is_active = 0';
+  }
   if (search) {
     sql += ' AND (name LIKE ? OR email LIKE ?)';
     params.push(`%${search}%`, `%${search}%`);
@@ -478,6 +490,39 @@ async function setUserActive(userId, isActive, reason) {
   } else {
     emailService.sendUserBannedEmail(existing, trimmedReason);
   }
+}
+
+/**
+ * The Users page's "Invite" button — same email as
+ * admin.service.js's business-scoped resendOwnerInvite above
+ * (business-import.service.js's sendOwnerInvite, reused as-is), just
+ * reachable by user id instead of business id so the Users table can
+ * offer it directly without knowing which business a row's user owns.
+ * An 'invited' user only ever got that way via CSV import, which always
+ * creates at least one business for them — the most recently created one
+ * is used for the email's business-name mention; a user with several
+ * (re-imported more than once before accepting) just gets the latest.
+ */
+async function resendUserInvite(userId) {
+  const [userRows] = await pool.query(
+    `SELECT id, name, email, account_status FROM users WHERE id = ? AND role = 'business'`,
+    [userId],
+  );
+  const user = userRows[0];
+  if (!user) throw ApiError.notFound('User not found');
+  if (user.account_status !== 'invited') {
+    throw ApiError.conflict('This user\'s account is already active — there\'s no invite to resend.');
+  }
+
+  const [businessRows] = await pool.query(
+    'SELECT name FROM businesses WHERE owner_id = ? ORDER BY created_at DESC LIMIT 1',
+    [userId],
+  );
+
+  await businessImportService.sendOwnerInvite(
+    { id: user.id, name: user.name, email: user.email },
+    { name: businessRows[0]?.name || 'your business' },
+  );
 }
 
 /**
@@ -687,6 +732,7 @@ module.exports = {
   getAllUsers,
   exportUsersToCsv,
   setUserActive,
+  resendUserInvite,
   deleteUserAccount,
   // Business CSV import — same thin-delegation pattern as categories/
   // notifications/content above.
