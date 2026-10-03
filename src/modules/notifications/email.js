@@ -1,5 +1,7 @@
 const nodemailer = require('nodemailer');
 const QRCode = require('qrcode');
+const fs = require('fs/promises');
+const path = require('path');
 const env = require('../../config/env');
 const { pool } = require('../../config/db');
 
@@ -30,7 +32,17 @@ function getTransporter() {
   return transporter;
 }
 
-async function sendEmail({ to, subject, html, text, attachments }) {
+// Cached after the first read — every email sends the same logo file, so
+// there's no reason to hit disk again on every single send.
+let cachedLogoAttachment = null;
+async function logoAttachment() {
+  if (cachedLogoAttachment) return cachedLogoAttachment;
+  const buffer = await fs.readFile(path.join(__dirname, '../../assets/email-logo.png'));
+  cachedLogoAttachment = { filename: 'albmap-logo.png', content: buffer, cid: 'logo' };
+  return cachedLogoAttachment;
+}
+
+async function sendEmail({ to, subject, html, text, attachments = [] }) {
   const t = getTransporter();
   if (!t) {
     console.log(`[EMAIL DISABLED] Would send "${subject}" to ${to}`);
@@ -38,7 +50,19 @@ async function sendEmail({ to, subject, html, text, attachments }) {
   }
 
   try {
-    await t.sendMail({ from: env.smtp.fromAddress, to, subject, html, text, attachments });
+    // Every email goes through emailWrapper, which always references
+    // cid:logo in its header — attached here once, centrally, so no
+    // individual sendXxxEmail function has to remember to include it
+    // (and callers that already attach their own files, like the QR
+    // codes below, just get the logo added alongside theirs).
+    await t.sendMail({
+      from: env.smtp.fromAddress,
+      to,
+      subject,
+      html,
+      text,
+      attachments: [await logoAttachment(), ...attachments],
+    });
     return { sent: true };
   } catch (err) {
     // A failed email should never fail the request that triggered it
@@ -52,7 +76,7 @@ async function sendEmail({ to, subject, html, text, attachments }) {
 const emailWrapper = (bodyHtml) => `
   <div style="font-family: -apple-system, sans-serif; max-width: 480px; margin: 0 auto; padding: 32px 24px;">
     <div style="display: inline-flex; align-items: center; gap: 8px; margin-bottom: 24px;">
-      <div style="width: 32px; height: 32px; border-radius: 8px; background: #E31320; color: white; display: flex; align-items: center; justify-content: center; font-weight: 700; font-family: sans-serif;">A</div>
+      <img src="cid:logo" width="32" height="32" alt="AlbMap" style="display: block; width: 32px; height: 32px;" />
       <span style="font-weight: 700; font-size: 20px; color: #1A1D1C;">AlbMap</span>
     </div>
     ${bodyHtml}
@@ -433,14 +457,14 @@ async function sendBusinessOwnerInviteEmail(user, business, rawToken) {
     subject: `"${business.name}" is live on AlbMap — join us!`,
     attachments: [androidQr, iosQr],
     html: emailWrapper(`
-      <table role="presentation" style="width: 100%; margin-bottom: 24px;">
+      <table role="presentation" style="width: 100%; max-width: 100%; table-layout: fixed; border-collapse: collapse; margin-bottom: 24px;">
         <tr>
-          <td style="text-align: center; padding: 0 8px;">
-            <img src="cid:qr-android" width="140" height="140" alt="Android QR code" style="display: block; margin: 0 auto;" />
+          <td style="width: 50%; text-align: center; padding: 0 6px; box-sizing: border-box;">
+            <img src="cid:qr-android" width="110" height="110" alt="Android QR code" style="display: block; width: 100%; max-width: 110px; height: auto; margin: 0 auto;" />
             <p style="font-size: 12px; color: #8A8880; margin-top: 6px;">Android</p>
           </td>
-          <td style="text-align: center; padding: 0 8px;">
-            <img src="cid:qr-ios" width="140" height="140" alt="iOS QR code" style="display: block; margin: 0 auto;" />
+          <td style="width: 50%; text-align: center; padding: 0 6px; box-sizing: border-box;">
+            <img src="cid:qr-ios" width="110" height="110" alt="iOS QR code" style="display: block; width: 100%; max-width: 110px; height: auto; margin: 0 auto;" />
             <p style="font-size: 12px; color: #8A8880; margin-top: 6px;">iOS</p>
           </td>
         </tr>
