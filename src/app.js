@@ -40,7 +40,22 @@ app.use(express.urlencoded({ extended: true }));
 // header from the browser — only origins listed in CORS_ALLOWED_ORIGINS
 // are permitted, everything else (including "no origin" from tools like
 // curl/Postman) is allowed through unless you tighten this further.
-app.use(
+//
+// /auth/apple/callback is a deliberate exception: it's Apple's OWN server
+// form-POSTing the Sign-In-with-Apple-on-Android result here
+// (response_mode=form_post, see auth.routes.js), which real browsers
+// attach an `Origin: https://appleid.apple.com` header to even though
+// it's a top-level navigation, not a page-initiated fetch/XHR. That
+// origin was never in CORS_ALLOWED_ORIGINS (it only ever listed the
+// website/admin portal), so every Android Apple Sign-In failed here with
+// 403 "Not allowed by CORS" before appleCallback ever ran. This endpoint
+// is never called via JS from a page we control — there is nothing for
+// CORS to protect on it regardless of who/what the caller's origin is —
+// so it's exempted from the allowlist check entirely rather than trying
+// to keep Apple's origin value in an env var alongside our own clients'.
+app.use((req, res, next) => {
+  if (req.path.endsWith('/auth/apple/callback')) return next();
+
   cors({
     origin(origin, callback) {
       if (!origin || env.cors.allowedOrigins.length === 0 || env.cors.allowedOrigins.includes(origin)) {
@@ -49,8 +64,8 @@ app.use(
       return callback(new ApiError(403, 'Not allowed by CORS'));
     },
     credentials: true,
-  }),
-);
+  })(req, res, next);
+});
 
 app.use(morgan(env.isProduction ? 'combined' : 'dev'));
 
