@@ -70,13 +70,16 @@ const env = {
 
   // Same "ordered, not live yet" placeholders as the website's own
   // src/lib/app-links.ts — used for the QR codes in the business-owner
-  // invite email (notifications/email.js). Override via env the moment
-  // the app actually ships, or sooner if a TestFlight/internal-testing
-  // link exists ahead of a full release — everything else about the
-  // email works unchanged once these point somewhere real.
+  // invite email (notifications/email.js). Android's URL is correct by
+  // construction (it's just the real applicationId, com.albmap.app, in
+  // Google's fixed URL shape) — no env override ever needed there. iOS's
+  // numeric id isn't derivable the same way; this is the real App Store
+  // listing (shipped). ANDROID_PLAY_STORE_URL/IOS_APP_STORE_URL remain
+  // available to override either without a code change if needed later
+  // (a TestFlight link, a regional storefront, etc.).
   appStore: {
     android: process.env.ANDROID_PLAY_STORE_URL || 'https://play.google.com/store/apps/details?id=com.albmap.app',
-    ios: process.env.IOS_APP_STORE_URL || 'https://apps.apple.com/app/albmap/id0000000000',
+    ios: process.env.IOS_APP_STORE_URL || 'https://apps.apple.com/ch/app/albmap-app/id6804714938',
   },
 
    google: {
