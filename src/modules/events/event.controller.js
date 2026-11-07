@@ -11,7 +11,7 @@ const eventService = require('./event.service');
  * created, never the whole platform's worth.
  */
 const getEvents = asyncHandler(async (req, res) => {
-  const { category, businessId, from, to, page, limit, ownerId } = req.query;
+  const { category, businessId, from, to, page, limit, ownerId, lat, lng } = req.query;
 
   if (ownerId) {
     if (!req.user) {
@@ -26,6 +26,8 @@ const getEvents = asyncHandler(async (req, res) => {
 
   const { events, pagination } = await eventService.getEvents({
     category, businessId, from, to, page, limit, userId: req.user?.id,
+    userLat: lat ? parseFloat(lat) : null,
+    userLng: lng ? parseFloat(lng) : null,
   });
   res.json({ data: events, pagination });
 });

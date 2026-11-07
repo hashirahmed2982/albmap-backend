@@ -39,7 +39,21 @@ function toMysqlDatetime(isoString) {
   return date.toISOString().slice(0, 19).replace('T', ' ');
 }
 
-async function getEvents({ category, businessId, from, to, page, limit, userId }) {
+// Same formula as business.service.js's haversineKm — kept as a local
+// duplicate rather than extracted to a shared util, matching this
+// codebase's existing choice for getBusinessesInBounds (small, stable
+// math, not worth a cross-module dependency for).
+function haversineKm(lat1, lon1, lat2, lon2) {
+  const R = 6371;
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLon = ((lon2 - lon1) * Math.PI) / 180;
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos((lat1 * Math.PI) / 180) * Math.cos((lat2 * Math.PI) / 180) * Math.sin(dLon / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+async function getEvents({ category, businessId, from, to, page, limit, userId, userLat, userLng }) {
   const pageLimit = Math.min(Math.max(parseInt(limit, 10) || 20, 1), 100);
   const pageNum = Math.max(parseInt(page, 10) || 1, 1);
   const offset = (pageNum - 1) * pageLimit;
@@ -61,6 +75,7 @@ async function getEvents({ category, businessId, from, to, page, limit, userId }
   // filter).
   let sql = `
     SELECT SQL_CALC_FOUND_ROWS e.*, b.name AS business_name,
+           b.latitude AS business_latitude, b.longitude AS business_longitude,
            (SELECT COUNT(*) FROM event_interests ei WHERE ei.event_id = e.id) AS interest_count,
            EXISTS(
              SELECT 1 FROM event_interests ei2 WHERE ei2.event_id = e.id AND ei2.user_id = ?
@@ -88,14 +103,40 @@ async function getEvents({ category, businessId, from, to, page, limit, userId }
     params.push(toMysqlDatetime(to));
   }
 
-  sql += ' ORDER BY e.start_time ASC LIMIT ? OFFSET ?';
-  params.push(pageLimit, offset);
+  // Same app-side-pagination tradeoff as getBusinesses: distance sort
+  // needs Haversine, which isn't expressible as a plain SQL ORDER BY, so
+  // when userLat/userLng are given we fetch every matching row (no SQL
+  // LIMIT) and sort/paginate the computed array instead.
+  const needsAppSidePagination = userLat != null && userLng != null;
+  if (!needsAppSidePagination) {
+    sql += ' ORDER BY e.start_time ASC LIMIT ? OFFSET ?';
+    params.push(pageLimit, offset);
+  }
 
   const [rows] = await pool.query(sql, params);
-  const [[{ total }]] = await pool.query('SELECT FOUND_ROWS() AS total');
+  let events = rows.map(toPublicEvent);
+  let total;
+
+  if (needsAppSidePagination) {
+    events = rows.map((row, i) => ({
+      ...events[i],
+      _distanceKm:
+        row.business_latitude != null && row.business_longitude != null
+          ? haversineKm(userLat, userLng, row.business_latitude, row.business_longitude)
+          : Infinity,
+    }));
+    events.sort((a, b) => a._distanceKm - b._distanceKm);
+    events = events.map(({ _distanceKm, ...rest }) => rest);
+
+    total = events.length;
+    events = events.slice(offset, offset + pageLimit);
+  } else {
+    const [[{ total: foundTotal }]] = await pool.query('SELECT FOUND_ROWS() AS total');
+    total = foundTotal;
+  }
 
   return {
-    events: rows.map(toPublicEvent),
+    events,
     pagination: { page: pageNum, limit: pageLimit, total, totalPages: Math.ceil(total / pageLimit) },
   };
 }
