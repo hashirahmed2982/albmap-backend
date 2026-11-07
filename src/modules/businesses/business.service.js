@@ -156,6 +156,47 @@ function haversineKm(lat1, lon1, lat2, lon2) {
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
+// A reasonable hard cap on one viewport's worth of markers — beyond this
+// many in a single bounds query, the right UX is to zoom in (which
+// shrinks the bounds and naturally reduces the result set), not to keep
+// handing the client more unclustered points. Also guards against an
+// accidentally huge bounds query (e.g. a bug sending world-sized bounds)
+// returning the entire table in one response.
+const MAX_MAP_RESULTS = 1000;
+
+/**
+ * Powers the map's viewport-based marker loading — the client calls this
+ * on initial load AND again on every pan/zoom with the map's current
+ * visible bounds, instead of getBusinesses()'s fixed-size single page
+ * (which only ever shows whichever handful of rows happened to land on
+ * page 1, regardless of how many more exist just outside it). Not
+ * paginated — a viewport is already a natural cap on how much area (and
+ * therefore how many rows) one request covers, backstopped by
+ * MAX_MAP_RESULTS for the pathological case.
+ *
+ * Assumes swLng < neLng (no antimeridian-crossing viewport) — fine for
+ * this app's actual geographic scope (Albania + nearby diaspora
+ * countries), nowhere near the ±180° boundary where that would matter.
+ */
+async function getBusinessesInBounds({ swLat, swLng, neLat, neLng, category }) {
+  let sql = `SELECT * FROM businesses
+             WHERE status = 'approved' AND is_active = 1
+               AND latitude BETWEEN ? AND ?
+               AND longitude BETWEEN ? AND ?`;
+  const params = [swLat, neLat, swLng, neLng];
+
+  if (category) {
+    sql += ' AND category = ?';
+    params.push(category);
+  }
+
+  sql += ' LIMIT ?';
+  params.push(MAX_MAP_RESULTS);
+
+  const [rows] = await pool.query(sql, params);
+  return rows.map(toPublicBusiness);
+}
+
 async function getBusinessById(id) {
   const [rows] = await pool.query('SELECT * FROM businesses WHERE id = ? LIMIT 1', [id]);
   if (rows.length === 0) throw ApiError.notFound('Business not found');
@@ -434,6 +475,7 @@ function toAdminBusiness(row) {
 
 module.exports = {
   getBusinesses,
+  getBusinessesInBounds,
   getBusinessById,
   searchBusinesses,
   getMyBusinesses,
