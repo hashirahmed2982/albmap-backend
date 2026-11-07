@@ -12,6 +12,8 @@ const router = express.Router();
 // passed (the "my businesses" case) — see business.controller.js.
 router.get('/', optionalAuth, controller.getBusinesses);
 
+router.get('/map', controller.getBusinessesForMap);
+
 router.get('/search', controller.searchBusinesses);
 
 router.get('/:id', controller.getBusinessById);

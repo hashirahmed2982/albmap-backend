@@ -84,12 +84,35 @@ function firstNonEmpty(rawRow, aliases) {
   return null;
 }
 
+/**
+ * Excel silently strips a leading "+" from a phone number typed into a
+ * cell that wasn't explicitly formatted as Text first — it coerces the
+ * value to a Number (which has no way to represent a leading +), so by
+ * the time the sheet is saved as CSV the + is already gone before this
+ * code ever sees it. Since every phone number elsewhere in this app is
+ * expected in "+<dial code><number>" form, a value that's purely digits
+ * and within E.164's 8-15 digit range (long enough to plausibly already
+ * include a country code, not just a bare local number) gets its "+"
+ * restored. Anything else — already has a "+", contains spaces/dashes,
+ * or is too short/long to plausibly be a full international number — is
+ * left exactly as-is; there's no reliable way to guess a missing country
+ * code for an actual bare local number, so this only repairs the
+ * specific, identifiable Excel-strip case.
+ */
+function normalizePhone(value) {
+  if (!value) return value;
+  if (value.startsWith('+')) return value;
+  if (/^\d{8,15}$/.test(value)) return `+${value}`;
+  return value;
+}
+
 function normalizeRow(rawRow, categoryLookup) {
   const normalized = {};
   for (const [field, aliases] of Object.entries(FIELD_ALIASES)) {
     if (field === 'category') continue; // resolved separately below
     normalized[field] = firstNonEmpty(rawRow, aliases);
   }
+  normalized.phone = normalizePhone(normalized.phone);
   normalized.category = resolveCategory(firstNonEmpty(rawRow, FIELD_ALIASES.category), categoryLookup);
   return normalized;
 }
@@ -218,8 +241,8 @@ async function importRow(row, adminId) {
   await pool.query(
     `INSERT INTO businesses
       (id, owner_id, name, category, street_address, city, postal_code, country,
-       latitude, longitude, phone, website, status, reviewed_by, reviewed_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'approved', ?, NOW())`,
+       latitude, longitude, phone, whatsapp_number, website, status, reviewed_by, reviewed_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'approved', ?, NOW())`,
     [
       businessId,
       owner.id,
@@ -231,6 +254,12 @@ async function importRow(row, adminId) {
       row.country || 'Albania',
       coords.latitude,
       coords.longitude,
+      row.phone,
+      // No separate WhatsApp column in the CSV — a CSV-imported business's
+      // WhatsApp defaults to the same number as its phone (same as the
+      // admin/web submission forms' "same as phone" checkbox, just
+      // without needing an explicit column here since there's only ever
+      // one phone number in this data source).
       row.phone,
       row.website,
       adminId,

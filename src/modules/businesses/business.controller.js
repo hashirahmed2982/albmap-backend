@@ -40,6 +40,29 @@ const getBusinesses = asyncHandler(async (req, res) => {
   res.json({ data: businesses, pagination });
 });
 
+/**
+ * GET /businesses/map?swLat=&swLng=&neLat=&neLng=&category= — the map's
+ * own fetch, separate from the paginated discovery feed above. Called on
+ * initial load and again on every pan/zoom with the map's current
+ * visible bounds, so marker coverage reflects what's actually in that
+ * region regardless of how many thousands of rows exist elsewhere.
+ */
+const getBusinessesForMap = asyncHandler(async (req, res) => {
+  const { swLat, swLng, neLat, neLng, category } = req.query;
+  if ([swLat, swLng, neLat, neLng].some((v) => v === undefined || v === '')) {
+    throw ApiError.badRequest('swLat, swLng, neLat, and neLng are all required');
+  }
+
+  const businesses = await businessService.getBusinessesInBounds({
+    swLat: parseFloat(swLat),
+    swLng: parseFloat(swLng),
+    neLat: parseFloat(neLat),
+    neLng: parseFloat(neLng),
+    category,
+  });
+  res.json({ data: businesses });
+});
+
 const getBusinessById = asyncHandler(async (req, res) => {
   const business = await businessService.getBusinessById(req.params.id);
   res.json(business);
@@ -78,6 +101,7 @@ const uploadLogo = asyncHandler(async (req, res) => {
 
 module.exports = {
   getBusinesses,
+  getBusinessesForMap,
   getBusinessById,
   searchBusinesses,
   submitBusiness,
